@@ -11,7 +11,7 @@
 
 - API 에러는 `com.scheduler.common.error.ApiException`을 던진다. 예: `throw new ApiException(ErrorCode.NOT_FOUND)`
 - 응답 모양(`{ code, message, fieldErrors, retryAfterSeconds }`)은 `GlobalExceptionHandler`가 한 곳에서 만든다. 컨트롤러에서 에러 응답을 직접 만들지 않는다.
-- 에러 코드는 `ErrorCode`에 둔다. 기능별 코드(예: `PLATE_INVALID`)는 그 기능을 만들 때 추가하고, [API 명세 9장](../specs/api-spec.md)과 맞춘다.
+- 에러 코드는 `ErrorCode`에 둔다. 기능별 코드(예: `PROJECT_KEY_INVALID`)는 그 기능을 만들 때 추가하고, [API 명세 9장](../design/spec/api-spec.md#9-에러-코드)과 맞춘다.
 - 요청 본문 검증은 `@Valid` + Bean Validation(`@NotBlank`, `@Size` …)으로 하면 `VALIDATION_FAILED`와 필드별 이유가 자동으로 나간다.
 - 예상하지 못한 오류는 `INTERNAL_ERROR`로 응답하고, 내부 내용은 로그에만 남긴다.
 

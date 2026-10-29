@@ -25,6 +25,7 @@ erDiagram
     issues ||--o{ comments : "댓글"
     users |o--o{ comments : "작성"
     users ||--o{ notifications : "받는 사람"
+    users ||--o{ refresh_tokens : "로그인 기기"
     issues |o--o{ notifications : "대상 이슈"
 
     users {
@@ -34,6 +35,13 @@ erDiagram
         varchar name
         datetime created_at
         datetime updated_at
+    }
+    refresh_tokens {
+        bigint id PK
+        bigint user_id FK
+        varchar token_hash UK
+        datetime expires_at
+        datetime created_at
     }
     projects {
         bigint id PK
@@ -160,6 +168,21 @@ erDiagram
 | password_hash | VARCHAR(255) | NOT NULL | BCrypt 해시 |
 | name | VARCHAR(50) | NOT NULL | 표시 이름 |
 | created_at, updated_at | DATETIME | NOT NULL | |
+
+### refresh_tokens — 리프레시 토큰
+
+| 컬럼 | 타입 | 제약 | 설명 |
+|---|---|---|---|
+| id | BIGINT | PK | |
+| user_id | BIGINT | FK → users, NOT NULL | |
+| token_hash | VARCHAR(64) | UK, NOT NULL | 리프레시 토큰의 SHA-256 해시. 원문은 저장하지 않는다 |
+| expires_at | DATETIME | NOT NULL | 발급 + 14일 |
+| created_at | DATETIME | NOT NULL | |
+
+- 로그인할 때마다 한 행 (기기마다 따로 로그인 유지).
+- 재발급하면 쓴 행을 지우고 새 행을 만든다 (한 번 쓰면 무효).
+- 로그아웃하면 그 행을, 비밀번호 변경 · 탈퇴하면 그 사용자의 모든 행을 지운다.
+- 만료된 행은 하루 한 번 지운다.
 
 ### projects — 프로젝트
 
@@ -354,6 +377,7 @@ erDiagram
 | FK | ON DELETE | 이유 |
 |---|---|---|
 | `project_members.user_id` | CASCADE | 멤버십은 사람과 함께 사라진다 |
+| `refresh_tokens.user_id` | CASCADE | 로그인 상태도 함께 사라진다 |
 | `notifications.recipient_id`, `actor_id` | CASCADE | 받을 사람·보낸 사람이 없으면 의미 없다 |
 | `issues.assignee_id` | SET NULL | 미배정으로 돌아간다 |
 | `issues.reporter_id`, `comments.author_id` | SET NULL | 이슈·댓글은 남기고 작성자는 "알 수 없는 사용자"로 표시 |
@@ -444,6 +468,20 @@ Table users {
   사용자. 탈퇴하면 행을 바로 지운다 (하드 삭제).
   - 리드인 프로젝트가 있으면 탈퇴 불가 (projects.lead_id RESTRICT).
   - 만든 이슈·댓글은 남고 작성자는 NULL("알 수 없는 사용자").
+  '''
+}
+
+Table refresh_tokens {
+  id bigint [pk, increment]
+  user_id bigint [not null]
+  token_hash varchar(64) [not null, unique, note: '리프레시 토큰의 SHA-256 해시. 원문은 저장하지 않음']
+  expires_at datetime [not null, note: '발급 + 14일']
+  created_at datetime [not null]
+
+  Note: '''
+  JWT 리프레시 토큰. 로그인한 기기마다 한 행.
+  - 재발급(rotation)하면 쓴 행을 지우고 새 행을 만든다.
+  - 로그아웃: 그 행 삭제. 비밀번호 변경 · 탈퇴: 그 사용자의 모든 행 삭제.
   '''
 }
 
@@ -661,4 +699,5 @@ Ref: issues.reporter_id > users.id [delete: set null] // "알 수 없는 사용�
 Ref: comments.author_id > users.id [delete: set null]
 Ref: notifications.recipient_id > users.id [delete: cascade]
 Ref: notifications.actor_id > users.id [delete: cascade]
+Ref: refresh_tokens.user_id > users.id [delete: cascade]
 ```
