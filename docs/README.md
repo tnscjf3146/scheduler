@@ -9,6 +9,7 @@ docs/
 ├── README.md
 ├── analysis/          # Jira 분석 (구조)
 ├── convention/        # 컨벤션
+├── setup/             # 기술 스택, 개발 환경 세팅
 └── design/            # 설계
     ├── erd.md         # ERD (데이터 모델)
     ├── spec/          # 명세
@@ -20,6 +21,7 @@ docs/
 |------|------|
 | `analysis/` | Jira 구조 분석 |
 | `convention/` | 컨벤션 (코드, 커밋, 브랜치 등) |
+| `setup/` | 기술 스택 특징, 프론트엔드 · 백엔드 · 앱 세팅 방법 |
 | `design/erd.md` | ERD (데이터 모델) |
 | `design/spec/` | 기능 명세 |
 | `design/user-flow/` | 유저플로우 |
