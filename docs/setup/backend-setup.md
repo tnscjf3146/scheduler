@@ -36,6 +36,7 @@ Dependencies:
 | Spring Data JPA | DB 접근 |
 | Validation | 요청 검증 (`@Valid`) |
 | Spring Security | 로그인, 권한 |
+| OAuth2 Resource Server | JWT 검증 (`Authorization: Bearer` 헤더). 토큰 발급은 같은 라이브러리의 `JwtEncoder`로 한다 |
 | MySQL Driver | MySQL 연결 |
 | Flyway Migration | 스키마 관리 |
 | Docker Compose Support | 실행 시 로컬 MySQL 자동 기동 |
