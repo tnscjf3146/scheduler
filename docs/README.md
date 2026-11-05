@@ -29,4 +29,4 @@ docs/
 | `design/user-flow/` | 유저플로우 |
 | `design/policy/` | 정책 |
 | `design/asset/` | 에셋 목록 (로고, 앱 아이콘, UI 아이콘) |
-| `design/draft/` | 디자인 시안. `issue-icon-options.html`: 이슈 유형 · 우선순위 아이콘 시안 |
+| `design/draft/` | 디자인 시안. `issue-icon-options.html`: 이슈 유형 · 우선순위 아이콘 시안, `status-category-options.html`: 상태 분류(할 일 · 진행 중 · 완료) 표시 시안 |
