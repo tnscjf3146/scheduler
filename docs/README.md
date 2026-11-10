@@ -12,6 +12,7 @@ docs/
 ├── setup/             # 기술 스택, 개발 환경 세팅
 └── design/            # 설계
     ├── erd.md         # ERD (데이터 모델)
+    ├── design-progress.md  # 디자인 진행 현황 (이어받을 때 먼저 읽기)
     ├── asset/         # 에셋 목록 (로고, 아이콘)
     ├── draft/         # 디자인 시안 (HTML, 브라우저로 열기)
     ├── spec/          # 명세
@@ -30,3 +31,4 @@ docs/
 | `design/policy/` | 정책 |
 | `design/asset/` | 에셋 목록 (로고, 앱 아이콘, UI 아이콘) |
 | `design/draft/` | 디자인 시안. `issue-icon-options.html`: 이슈 유형 · 우선순위 아이콘 시안, `status-category-options.html`: 상태 분류(할 일 · 진행 중 · 완료) 표시 시안 |
+| `design/design-progress.md` | 디자인 진행 현황. Figma 위치, 정한 것, 남은 일 (작업 이어받을 때 먼저 읽기) |
