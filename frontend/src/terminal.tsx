@@ -55,7 +55,7 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
   }, [agent?.id])
 
   return (
-    <aside className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-[#1f1f1f]">
+    <aside className="flex min-w-0 flex-[36] flex-col overflow-hidden rounded-xl bg-[#1f1f1f]">
       <header className="flex items-center gap-2.5 border-b border-neutral-800 bg-neutral-800/60 px-3.5 py-3">
         {agent ? (
           <>

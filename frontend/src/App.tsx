@@ -49,15 +49,15 @@ export default function App() {
       </header>
 
       <main className="flex min-h-0 flex-1 gap-4 p-4">
-        <div className="flex w-[300px] min-h-0 shrink-0 flex-col gap-4">
+        <div className="flex min-w-0 min-h-0 flex-[30] flex-col gap-4">
           <Upcoming todos={todos} />
           <Agents agents={agents} selected={selected} onSelect={setSelected} reload={loadAgents} />
         </div>
-        <div className="flex w-[380px] min-h-0 shrink-0 flex-col gap-4">
+        <div className="flex min-w-0 min-h-0 flex-[38] flex-col gap-4">
           <Todos todos={todos} reload={loadTodos} />
           <Calendar todos={todos} />
         </div>
-        <div className="flex w-[320px] min-h-0 shrink-0 flex-col gap-4">
+        <div className="flex min-w-0 min-h-0 flex-[32] flex-col gap-4">
           <MailReview />
           <Approvals />
         </div>
