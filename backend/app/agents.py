@@ -1,4 +1,6 @@
 import asyncio
+import shutil
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -41,15 +43,26 @@ AGENTS_MD = """# {name}
 - `get_approval`: 받은 `id`로 결과를 확인한다. `pending`이면 아직 대기, `approved`면 진행, `rejected`면 `reason`을 읽고 고친다.
 - 결과는 자동으로 오지 않는다. 사용자가 "결재 확인해"라고 하거나 다음 단계로 넘어가기 전에 직접 확인한다.
 
+## 할 일 · 달력
+
+대시보드의 할 일 목록과 달력은 같은 데이터다. 마감 일시(`due_at`)가 있는 할 일이 달력의 그 날짜에 보이고, 날짜가 지나지 않은 것은 "다가오는 일정"에도 보인다. `scheduler` MCP 서버의 도구로 다룬다.
+
+- `list_todos`: 목록 보기. `from`·`to`(YYYY-MM-DD)로 기간을, `done`으로 완료 여부를 거른다.
+- `add_todo`: `title`, `due_at`(YYYY-MM-DDTHH:MM, 현지 시간, 선택).
+- `update_todo`: `id`와 바꿀 값만. 완료 처리는 `done: true`. `memo`(메모)와 `subtasks`(하위 할 일 `[{{"title", "done"}}]`)는 통째로 바뀌니 읽은 뒤 고쳐서 보낸다.
+- `delete_todo`: 되돌릴 수 없다. 사용자가 지우라고 한 것만 지운다.
+- 사용자가 "내일", "다음 주 월요일"처럼 말하면 오늘 날짜를 기준으로 계산한다. 시간을 말하지 않았으면 09:00으로 둔다.
+
 ## 할 수 없는 것
 
-할 일, 달력, 메일에는 접근할 수 없다. 필요하면 사용자에게 부탁한다.
+메일에는 접근할 수 없다. 필요하면 사용자에게 부탁한다.
 """
 
 
-def _write_instructions(workspace: Path, name: str, role: str, persona: str) -> None:
+def _write_instructions(workspace: Path, name: str, role: str, persona: str, replace_agents_md: bool = False) -> None:
     """AGENTS.md is the one source, read by Codex as is. Claude Code and Gemini CLI read their own file, which imports it.
-    Files that already exist are left alone: a user-chosen folder may be a project with its own."""
+    Files that already exist are left alone: a user-chosen folder may be a project with its own.
+    A handover replaces AGENTS.md, since it describes the agent that just left."""
     files = {
         "AGENTS.md": AGENTS_MD.format(
             name=name,
@@ -61,7 +74,7 @@ def _write_instructions(workspace: Path, name: str, role: str, persona: str) -> 
         "GEMINI.md": "@AGENTS.md\n",
     }
     for file, text in files.items():
-        if not (workspace / file).exists():
+        if not (workspace / file).exists() or (replace_agents_md and file == "AGENTS.md"):
             (workspace / file).write_text(text, encoding="utf-8")
 
 
@@ -91,13 +104,31 @@ def create(body: AgentIn) -> dict:
         workspace = db.data_dir() / "agents" / agent_id / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
     _write_instructions(workspace, body.name.strip(), body.role.strip(), body.persona.strip())
-    cwd = str(workspace)
     with db.connect() as conn:
-        conn.execute(
-            "INSERT INTO agents (id, name, role, cli, cwd, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (agent_id, body.name.strip(), body.role.strip(), body.cli, cwd, db.now()),
-        )
-        return {**_get(conn, agent_id), "status": "stopped"}
+        return _insert(conn, agent_id, body, workspace)
+
+
+def _insert(conn, agent_id: str, body: AgentIn, workspace: Path) -> dict:
+    conn.execute(
+        "INSERT INTO agents (id, name, role, cli, cwd, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (agent_id, body.name.strip(), body.role.strip(), body.cli, str(workspace), db.now()),
+    )
+    return {**_get(conn, agent_id), "status": "stopped"}
+
+
+@router.post("/{agent_id}/handover", status_code=201)
+def handover(agent_id: str, body: AgentIn) -> dict:
+    """Fires the agent and hires a new one into the same work folder (body.cwd is ignored).
+    The new agent gets its own AGENTS.md and starts a fresh conversation; the old conversation stays on disk."""
+    with db.connect() as conn:
+        workspace = Path(_get(conn, agent_id)["cwd"])
+        sessions.stop(agent_id)
+        _write_instructions(workspace, body.name.strip(), body.role.strip(), body.persona.strip(), replace_agents_md=True)
+        new_id = db.new_id()
+        (db.data_dir() / "agents" / new_id).mkdir(parents=True, exist_ok=True)
+        (db.data_dir() / "agents" / new_id / sessions.FRESH_MARKER).touch()
+        conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+        return _insert(conn, new_id, body, workspace)
 
 
 @router.post("/{agent_id}/restart")
@@ -110,11 +141,33 @@ def restart(agent_id: str) -> dict:
 
 
 @router.delete("/{agent_id}", status_code=204)
-def delete(agent_id: str) -> None:
+def delete(agent_id: str, purge: bool = False) -> None:
+    """Without purge ("해고") the agent's folder stays. With purge ("삭제") the app's own folder for it goes too:
+    the workspace it made and its launch files. A work folder the user chose is never touched."""
     with db.connect() as conn:
-        _get(conn, agent_id)
+        agent = _get(conn, agent_id)
         sessions.stop(agent_id)
+        if purge:
+            agents_root = db.data_dir() / "agents"
+            _remove_tree(agents_root / agent_id)
+            # After a handover the workspace sits under the first agent's folder; it is still the app's own.
+            cwd = Path(agent["cwd"])
+            if cwd.is_relative_to(agents_root):
+                _remove_tree(agents_root / cwd.relative_to(agents_root).parts[0])
         conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+
+
+def _remove_tree(folder: Path) -> None:
+    # The just-killed shell can hold the folder open for a moment on Windows.
+    for _ in range(10):
+        try:
+            shutil.rmtree(folder)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            time.sleep(0.3)
+    raise HTTPException(409, "폴더를 지우지 못했습니다. 열려 있는 파일을 닫고 다시 시도하세요")
 
 
 @router.websocket("/{agent_id}/terminal")

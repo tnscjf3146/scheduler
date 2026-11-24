@@ -4,7 +4,7 @@ import { api, type Agent, type Todo } from './api'
 import { Approvals } from './approvals'
 import { MailReview } from './mail'
 import { TerminalPanel } from './terminal'
-import { Calendar, Todos, Upcoming } from './todos'
+import { Calendar, TodoDetail, Todos, Upcoming } from './todos'
 
 function Clock() {
   const [now, setNow] = useState(new Date())
@@ -25,6 +25,9 @@ export default function App() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  // The todo whose detail popup is open, by id so it follows the latest data (agents change todos too).
+  const [openTodo, setOpenTodo] = useState<string | null>(null)
+  const [restarts, setRestarts] = useState(0) // bumping it remounts the terminal, which reconnects to a new session
 
   const loadTodos = useCallback(() => api<Todo[]>('/api/todos').then(setTodos, () => {}), [])
   const loadAgents = useCallback(() => api<Agent[]>('/api/agents').then(setAgents, () => {}), [])
@@ -32,11 +35,16 @@ export default function App() {
   useEffect(() => {
     loadTodos()
     loadAgents()
-    const timer = setInterval(loadAgents, 5_000) // session status changes on its own (CLI exits etc.)
+    // Both change outside this page: session status on its own (CLI exits etc.), todos through agents' MCP tools.
+    const timer = setInterval(() => {
+      loadAgents()
+      loadTodos()
+    }, 5_000)
     return () => clearInterval(timer)
   }, [loadTodos, loadAgents])
 
   const agent = agents.find((a) => a.id === selected) ?? null
+  const opened = todos.find((t) => t.id === openTodo)
 
   return (
     <div className="flex h-full flex-col bg-neutral-100 text-neutral-900">
@@ -50,19 +58,20 @@ export default function App() {
 
       <main className="flex min-h-0 flex-1 gap-4 p-4">
         <div className="flex min-w-0 min-h-0 flex-[30] flex-col gap-4">
-          <Upcoming todos={todos} />
-          <Agents agents={agents} selected={selected} onSelect={setSelected} reload={loadAgents} />
+          <Upcoming todos={todos} onOpen={setOpenTodo} />
+          <Agents agents={agents} selected={selected} onSelect={setSelected} onRestarted={() => setRestarts((n) => n + 1)} reload={loadAgents} />
         </div>
         <div className="flex min-w-0 min-h-0 flex-[38] flex-col gap-4">
-          <Todos todos={todos} reload={loadTodos} />
+          <Todos todos={todos} reload={loadTodos} onOpen={setOpenTodo} />
           <Calendar todos={todos} />
         </div>
         <div className="flex min-w-0 min-h-0 flex-[32] flex-col gap-4">
           <MailReview />
           <Approvals />
         </div>
-        <TerminalPanel agent={agent} onStatus={loadAgents} />
+        <TerminalPanel key={restarts} agent={agent} onStatus={loadAgents} />
       </main>
+      {opened && <TodoDetail key={opened.id} todo={opened} onClose={() => setOpenTodo(null)} reload={loadTodos} />}
     </div>
   )
 }

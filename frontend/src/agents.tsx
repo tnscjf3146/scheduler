@@ -12,19 +12,49 @@ declare global {
 export const CLI_LABEL: Record<Agent['cli'], string> = { claude: 'Claude Code', codex: 'Codex', shell: 'PowerShell' }
 const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
 
-export function Agents({ agents, selected, onSelect, reload }: { agents: Agent[]; selected: string | null; onSelect: (id: string) => void; reload: () => void }) {
-  const [adding, setAdding] = useState(false)
+export function Agents({
+  agents,
+  selected,
+  onSelect,
+  onRestarted,
+  reload,
+}: {
+  agents: Agent[]
+  selected: string | null
+  onSelect: (id: string) => void
+  onRestarted: () => void
+  reload: () => void
+}) {
+  // null: closed. {}: add a new agent. { from }: hand `from`'s work folder over to a new agent.
+  const [adding, setAdding] = useState<{ from?: Agent } | null>(null)
   const [menu, setMenu] = useState<string | null>(null)
 
-  async function act(agent: Agent, action: 'restart' | 'delete') {
+  async function act(agent: Agent, action: 'restart' | 'fire' | 'delete') {
     setMenu(null)
-    if (action === 'delete' && !window.confirm(`'${agent.name}' 에이전트를 삭제할까요? 터미널 세션도 종료됩니다.`)) return
-    await api(action === 'restart' ? `/api/agents/${agent.id}/restart` : `/api/agents/${agent.id}`, { method: action === 'restart' ? 'POST' : 'DELETE' })
+    if (action === 'restart') {
+      await api(`/api/agents/${agent.id}/restart`, { method: 'POST' })
+      onSelect(agent.id)
+      onRestarted()
+      return reload()
+    }
+    const ownFolder = /\\Scheduler\\agents\\/.test(agent.cwd) // the app made it; a folder the user chose is never deleted
+    const question =
+      action === 'fire'
+        ? `'${agent.name}'을(를) 해고할까요?\n터미널 세션이 종료되고 작업 폴더는 그대로 남습니다.\n${agent.cwd}`
+        : ownFolder
+          ? `'${agent.name}'을(를) 삭제할까요?\n작업 폴더와 그 안의 파일까지 모두 지웁니다. 되돌릴 수 없습니다.\n${agent.cwd}`
+          : `'${agent.name}'을(를) 삭제할까요?\n직접 지정한 작업 폴더는 지우지 않습니다.\n${agent.cwd}`
+    if (!window.confirm(question)) return
+    try {
+      await api(`/api/agents/${agent.id}${action === 'delete' ? '?purge=true' : ''}`, { method: 'DELETE' })
+    } catch (err) {
+      window.alert((err as Error).message)
+    }
     reload()
   }
 
   return (
-    <Widget title="Agent" action={<LinkButton onClick={() => setAdding(true)}>+ 추가</LinkButton>}>
+    <Widget title="Agent" action={<LinkButton onClick={() => setAdding({})}>+ 추가</LinkButton>}>
       {agents.length === 0 && <Empty>에이전트를 추가하세요</Empty>}
       {agents.map((a) => (
         <div
@@ -56,7 +86,20 @@ export function Agents({ agents, selected, onSelect, reload }: { agents: Agent[]
               <button className="px-3 py-1.5 text-left hover:bg-neutral-100" onClick={() => act(a, 'restart')}>
                 재시작
               </button>
-              <button className="px-3 py-1.5 text-left text-red-600 hover:bg-neutral-100" onClick={() => act(a, 'delete')}>
+              <button
+                className="px-3 py-1.5 text-left hover:bg-neutral-100"
+                onClick={() => {
+                  setMenu(null)
+                  setAdding({ from: a })
+                }}
+                title="해고하고, 같은 작업 폴더로 새 에이전트를 만듭니다"
+              >
+                인수인계
+              </button>
+              <button className="px-3 py-1.5 text-left hover:bg-neutral-100" onClick={() => act(a, 'fire')} title="작업 폴더는 남깁니다">
+                해고
+              </button>
+              <button className="px-3 py-1.5 text-left text-red-600 hover:bg-neutral-100" onClick={() => act(a, 'delete')} title="작업 폴더까지 지웁니다">
                 삭제
               </button>
             </div>
@@ -65,9 +108,10 @@ export function Agents({ agents, selected, onSelect, reload }: { agents: Agent[]
       ))}
       {adding && (
         <AddAgent
-          onClose={() => setAdding(false)}
+          from={adding.from}
+          onClose={() => setAdding(null)}
           onAdded={(a) => {
-            setAdding(false)
+            setAdding(null)
             reload()
             onSelect(a.id)
           }}
@@ -77,8 +121,8 @@ export function Agents({ agents, selected, onSelect, reload }: { agents: Agent[]
   )
 }
 
-function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agent) => void }) {
-  const [form, setForm] = useState({ name: '', role: '', persona: '', cli: 'claude' as Agent['cli'], cwd: '' })
+function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => void; onAdded: (a: Agent) => void }) {
+  const [form, setForm] = useState({ name: '', role: '', persona: '', cli: from?.cli ?? ('claude' as Agent['cli']), cwd: '' })
   const [error, setError] = useState<string | null>(null)
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [k]: e.target.value })
@@ -90,7 +134,8 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
 
   async function submit() {
     try {
-      onAdded(await api<Agent>('/api/agents', { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null } }))
+      const url = from ? `/api/agents/${from.id}/handover` : '/api/agents'
+      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null } }))
     } catch (err) {
       setError((err as Error).message)
     }
@@ -98,7 +143,7 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
 
   return (
     <Modal
-      title={<h2 className="text-[17px] font-bold">에이전트 추가</h2>}
+      title={<h2 className="text-[17px] font-bold">{from ? `인수인계: '${from.name}'의 후임` : '에이전트 추가'}</h2>}
       onClose={onClose}
       footer={
         <>
@@ -108,7 +153,7 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
             취소
           </Button>
           <Button onClick={submit} disabled={!form.name.trim()}>
-            추가
+            {from ? '인수인계' : '추가'}
           </Button>
         </>
       }
@@ -139,6 +184,13 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
           <option value="shell">PowerShell (CLI 없이)</option>
         </select>
       </label>
+      {from ? (
+        <p className="rounded-md bg-neutral-100 px-3 py-2 text-[11px] text-neutral-600">
+          '{from.name}'은(는) 해고되고, 새 에이전트가 같은 작업 폴더에서 새 대화로 시작합니다. 폴더의 파일은 그대로이고 AGENTS.md만 새로 씁니다.
+          <br />
+          <span className="break-all text-neutral-500">{from.cwd}</span>
+        </p>
+      ) : (
       <label className="flex flex-col gap-1 text-xs font-medium">
         작업 폴더
         <div className="flex gap-2">
@@ -150,6 +202,7 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
           )}
         </div>
       </label>
+      )}
       <p className="text-[11px] text-neutral-500">CLI 로그인은 터미널에서 처음 실행될 때 CLI가 직접 안내합니다.</p>
     </Modal>
   )

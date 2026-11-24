@@ -11,6 +11,7 @@ from winpty import PtyProcess
 from . import db
 
 SCROLLBACK = 256_000  # characters replayed to a newly opened terminal view
+FRESH_MARKER = "fresh"  # in an agent's folder: start a new conversation next launch instead of continuing
 
 
 def _ps_quote(s: str) -> str:
@@ -31,9 +32,14 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
     mcp_json = folder / "mcp.json"
     mcp_json.write_text(json.dumps({"mcpServers": {"scheduler": {"type": "http", "url": mcp_url}}}), encoding="utf-8")
 
+    # A handed-over agent shares its predecessor's folder, and so its saved conversation: skip that once.
+    fresh = folder / FRESH_MARKER
+    is_fresh = fresh.exists()
+    fresh.unlink(missing_ok=True)
+
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
-        cont = " --continue" if _has_claude_history(agent["cwd"]) else ""
+        cont = " --continue" if not is_fresh and _has_claude_history(agent["cwd"]) else ""
         lines.append(f"claude{cont} --mcp-config {_ps_quote(str(mcp_json))}")
     elif agent["cli"] == "codex":
         # Codex has no cheap "is there a session here?" check, so remember that it was started once.

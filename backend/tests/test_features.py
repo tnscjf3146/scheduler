@@ -34,7 +34,7 @@ def test_approval_flow_through_mcp(client, tmp_path):
     agent = client.post("/api/agents", json={"name": "문서 정리", "cli": "shell", "cwd": str(tmp_path)}).json()
 
     assert rpc(client, agent["id"], "initialize", {"protocolVersion": "2025-06-18"})["result"]["serverInfo"]["name"] == "scheduler"
-    assert {t["name"] for t in rpc(client, agent["id"], "tools/list")["result"]["tools"]} == {"submit_approval", "get_approval"}
+    assert {t["name"] for t in rpc(client, agent["id"], "tools/list")["result"]["tools"]} >= {"submit_approval", "get_approval"}
 
     import json
     res = rpc(client, agent["id"], "tools/call", {"name": "submit_approval", "arguments": {
@@ -50,6 +50,80 @@ def test_approval_flow_through_mcp(client, tmp_path):
 
     got = rpc(client, agent["id"], "tools/call", {"name": "get_approval", "arguments": {"id": approval_id}})
     assert json.loads(got["result"]["content"][0]["text"])["reason"] == "단가 확인"
+
+
+def test_agent_manages_todos_through_mcp(client, tmp_path):
+    import json
+
+    agent = client.post("/api/agents", json={"name": "비서", "cli": "shell", "cwd": str(tmp_path)}).json()
+    call = lambda name, **args: rpc(client, agent["id"], "tools/call", {"name": name, "arguments": args})["result"]
+    out = lambda res: json.loads(res["content"][0]["text"])
+
+    todo = out(call("add_todo", title="보고서 제출", due_at="2026-12-01T09:00"))
+    out(call("add_todo", title="날짜 없는 일"))
+    assert [t["title"] for t in client.get("/api/todos").json()] == ["보고서 제출", "날짜 없는 일"]  # the UI sees it
+
+    assert [t["title"] for t in out(call("list_todos", **{"from": "2026-12-01", "to": "2026-12-01"}))] == ["보고서 제출"]
+    assert out(call("update_todo", id=todo["id"], done=True))["done"] is True
+    assert [t["title"] for t in out(call("list_todos", done=False))] == ["날짜 없는 일"]
+
+    detail = out(call("update_todo", id=todo["id"], memo="단가 확인", subtasks=[{"title": "비교"}, {"title": "PDF", "done": True}]))
+    assert detail["memo"] == "단가 확인" and detail["subtasks"] == [{"title": "비교", "done": False}, {"title": "PDF", "done": True}]
+    assert next(t for t in client.get("/api/todos").json() if t["id"] == todo["id"])["subtasks"][1]["done"] is True
+
+    assert call("add_todo", title="x", due_at="내일")["isError"]  # bad date format is reported, not raised
+    assert call("update_todo", id="nope", done=True)["isError"]
+    out(call("delete_todo", id=todo["id"]))
+    assert len(client.get("/api/todos").json()) == 1
+
+
+def test_fire_keeps_folder_delete_removes_it(client, tmp_path):
+    fired = client.post("/api/agents", json={"name": "a", "cli": "shell"}).json()
+    deleted = client.post("/api/agents", json={"name": "b", "cli": "shell"}).json()
+    custom = tmp_path / "mine"
+    custom.mkdir()
+    chosen = client.post("/api/agents", json={"name": "c", "cli": "shell", "cwd": str(custom)}).json()
+
+    assert client.delete(f"/api/agents/{fired['id']}").status_code == 204
+    assert client.delete(f"/api/agents/{deleted['id']}?purge=true").status_code == 204
+    assert client.delete(f"/api/agents/{chosen['id']}?purge=true").status_code == 204
+    assert client.get("/api/agents").json() == []
+
+    assert (tmp_path / "agents" / fired["id"] / "workspace" / "AGENTS.md").exists()
+    assert not (tmp_path / "agents" / deleted["id"]).exists()
+    assert (custom / "AGENTS.md").exists()  # a folder the user chose is never deleted
+
+
+def test_handover_hires_new_agent_into_same_folder(client, tmp_path):
+    from app import sessions
+
+    old = client.post("/api/agents", json={"name": "전임", "cli": "claude", "persona": "느긋하다"}).json()
+    workspace = tmp_path / "agents" / old["id"] / "workspace"
+    (workspace / "result.txt").write_text("작업 결과", encoding="utf-8")
+
+    new = client.post(f"/api/agents/{old['id']}/handover", json={"name": "후임", "cli": "claude", "persona": "꼼꼼하다"})
+    assert new.status_code == 201
+    new = new.json()
+    assert [a["name"] for a in client.get("/api/agents").json()] == ["후임"]  # the old one is fired
+    assert new["cwd"] == old["cwd"]
+    assert (workspace / "result.txt").read_text(encoding="utf-8") == "작업 결과"
+    md = (workspace / "AGENTS.md").read_text(encoding="utf-8")
+    assert "후임" in md and "꼼꼼하다" in md and "느긋하다" not in md
+
+    # First launch starts a new conversation even though the folder has the old one; later launches continue.
+    (tmp_path / "agents" / new["id"]).mkdir(exist_ok=True)
+    history = lambda _cwd: True
+    sessions._has_claude_history, saved = history, sessions._has_claude_history
+    try:
+        launch = lambda: sessions._launch_script(new, "http://x/mcp").read_text(encoding="utf-8-sig")
+        assert "--continue" not in launch()
+        assert "--continue" in launch()
+    finally:
+        sessions._has_claude_history = saved
+
+    # Deleting the successor removes the workspace too, though it sits under the first agent's folder.
+    assert client.delete(f"/api/agents/{new['id']}?purge=true").status_code == 204
+    assert not (tmp_path / "agents" / old["id"]).exists()
 
 
 def test_agent_gets_own_workspace(client, tmp_path):

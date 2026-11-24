@@ -4,9 +4,9 @@ import json
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
-from . import db
+from . import db, todos
 
 router = APIRouter(tags=["approvals"])
 
@@ -79,7 +79,81 @@ TOOLS = [
         "description": "올린 결재 문서의 상태를 확인한다. status: pending(대기) | approved(승인) | rejected(반려, reason에 사유).",
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
     },
+    {
+        "name": "list_todos",
+        "description": "사용자의 할 일 목록을 본다. 마감일(due_at)이 있는 할 일은 대시보드 달력에도 보인다. 모든 조건은 선택이다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": {"type": "string", "description": "이 날짜(YYYY-MM-DD) 이후 마감만"},
+                "to": {"type": "string", "description": "이 날짜(YYYY-MM-DD) 이전 마감만"},
+                "done": {"type": "boolean", "description": "true면 완료한 것만, false면 안 한 것만"},
+            },
+        },
+    },
+    {
+        "name": "add_todo",
+        "description": "할 일을 추가한다. due_at을 주면 달력의 그 날짜에 표시된다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "할 일 (40자 이내, 대시보드에서 두 줄을 넘지 않게)"},
+                "due_at": {"type": "string", "description": "마감 일시 YYYY-MM-DDTHH:MM (현지 시간). 없으면 생략"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "update_todo",
+        "description": "할 일의 제목, 마감 일시, 완료 여부, 메모, 하위 할 일을 바꾼다. 준 값만 바뀐다. due_at에 null을 주면 날짜를 지운다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "title": {"type": "string"},
+                "due_at": {"type": ["string", "null"], "description": "YYYY-MM-DDTHH:MM"},
+                "done": {"type": "boolean"},
+                "memo": {"type": "string", "description": "메모 (2000자 이내). 기존 메모를 통째로 바꾼다"},
+                "subtasks": {
+                    "type": "array",
+                    "description": "하위 할 일 목록 전체 (30개 이내). 기존 목록을 통째로 바꾸므로 list_todos로 읽은 뒤 고쳐서 보낸다",
+                    "items": {
+                        "type": "object",
+                        "properties": {"title": {"type": "string"}, "done": {"type": "boolean"}},
+                        "required": ["title"],
+                    },
+                },
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "delete_todo",
+        "description": "할 일을 지운다. 되돌릴 수 없으니 사용자가 지우라고 한 것만 지운다.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+    },
 ]
+
+
+def _todo_tool(name: str, args: dict):
+    """The dashboard's own todo endpoints, so agents and the UI follow the same rules."""
+    if name == "list_todos":
+        due = lambda t: (t["due_at"] or "")[:10]
+        return [
+            t for t in todos.list_todos()
+            if ("from" not in args or (t["due_at"] and due(t) >= args["from"]))
+            and ("to" not in args or (t["due_at"] and due(t) <= args["to"]))
+            and ("done" not in args or t["done"] == args["done"])
+        ]
+    if name == "add_todo":
+        return todos.create(todos.TodoIn(**args))
+    if name == "update_todo":
+        todo_id = args.pop("id")
+        return todos.update(todo_id, todos.TodoPatch(**args))
+    if name == "delete_todo":
+        todos.delete(args["id"])
+        return {"deleted": args["id"]}
+    return None
 
 
 def _text(obj) -> dict:
@@ -87,6 +161,9 @@ def _text(obj) -> dict:
 
 
 def _call_tool(agent: dict, name: str, args: dict) -> dict:
+    result = _todo_tool(name, dict(args))
+    if result is not None:
+        return _text(result)
     with db.connect() as conn:
         if name == "submit_approval":
             approval_id = db.new_id()
@@ -131,6 +208,10 @@ async def mcp(agent_id: str, request: Request):
             result = _call_tool(dict(row), params["name"], params.get("arguments") or {})
         except KeyError as e:
             result = {**_text({"error": f"필수 값이 없습니다: {e}"}), "isError": True}
+        except ValidationError as e:
+            result = {**_text({"error": "값이 올바르지 않습니다", "detail": e.errors(include_url=False, include_context=False)}), "isError": True}
+        except HTTPException as e:
+            result = {**_text({"error": e.detail}), "isError": True}
     elif method == "ping":
         result = {}
     else:

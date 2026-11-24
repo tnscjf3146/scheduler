@@ -1,4 +1,5 @@
-export type Todo = { id: string; title: string; due_at: string | null; done: boolean; created_at: string }
+export type Subtask = { title: string; done: boolean }
+export type Todo = { id: string; title: string; due_at: string | null; done: boolean; created_at: string; memo: string; subtasks: Subtask[] }
 export type Agent = {
   id: string
   name: string

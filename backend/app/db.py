@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS todos (
     title TEXT NOT NULL,
     due_at TEXT,                         -- local time 'YYYY-MM-DDTHH:MM', NULL = no date
     done INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    memo TEXT NOT NULL DEFAULT '',
+    subtasks TEXT NOT NULL DEFAULT '[]'  -- JSON [{"title", "done"}], always saved as a whole list
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -98,6 +100,11 @@ def init() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
         conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')")
+        # Columns added after the first release; CREATE TABLE IF NOT EXISTS leaves older databases without them.
+        todo_cols = {r["name"] for r in conn.execute("PRAGMA table_info(todos)")}
+        for col, ddl in (("memo", "TEXT NOT NULL DEFAULT ''"), ("subtasks", "TEXT NOT NULL DEFAULT '[]'")):
+            if col not in todo_cols:
+                conn.execute(f"ALTER TABLE todos ADD COLUMN {col} {ddl}")
 
 
 def rows(cursor) -> list[dict]:

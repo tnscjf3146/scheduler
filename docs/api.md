@@ -16,13 +16,14 @@
 |---|---|---|---|
 | 할 일 | GET | `/api/todos` | 전체 목록 (안 한 것, 날짜순) |
 | 할 일 | POST | `/api/todos` | 추가. `title`, `due_at`(`YYYY-MM-DDTHH:MM`, 없어도 됨) |
-| 할 일 | PATCH | `/api/todos/{id}` | `title`, `due_at`, `done` 중 보낸 것만 수정 |
+| 할 일 | PATCH | `/api/todos/{id}` | `title`, `due_at`, `done`, `memo`, `subtasks`(`[{title, done}]`, 목록 통째로) 중 보낸 것만 수정 |
 | 할 일 | DELETE | `/api/todos/{id}` | 삭제 |
 | 다가오는 일정 | GET | `/api/todos/upcoming` | 안 했고 날짜가 지나지 않은 할 일, 가까운 순 5개 |
 | Agent | GET | `/api/agents` | 목록. `status`: `stopped` · `running` · `exited` |
 | Agent | POST | `/api/agents` | 추가. `name`, `role`, `cli`(`claude` · `codex` · `shell`), `cwd`(비우면 `%APPDATA%\Scheduler\agents\{id}\workspace`를 만들어 씀) |
 | Agent | POST | `/api/agents/{id}/restart` | 터미널 세션 종료. 다음에 열면 새로 시작 |
-| Agent | DELETE | `/api/agents/{id}` | 삭제 (세션도 종료) |
+| Agent | POST | `/api/agents/{id}/handover` | 인수인계: 해고하고 같은 작업 폴더로 새 에이전트 생성 (본문은 추가와 같음, `cwd`는 무시) |
+| Agent | DELETE | `/api/agents/{id}` | 해고: 세션 종료, 폴더는 남김. `?purge=true`면 삭제: 앱이 만든 `agents\{id}` 폴더까지 지움 |
 | 결재 대기 | GET | `/api/approvals?status=pending` | 결재 문서 목록 |
 | 결재 대기 | GET | `/api/approvals/{id}` | 결재 문서 |
 | 결재 대기 | POST | `/api/approvals/{id}/decision` | `decision`(`approved` · `rejected`), `reason`(반려 시 필수) |
@@ -44,7 +45,7 @@
   - `{"type": "resize", "cols": 120, "rows": 40}`: 터미널 크기 변경
 - 서버 → 화면: 터미널 출력 텍스트 그대로
 
-## MCP: 결재 올리기
+## MCP: 결재, 할 일
 
 에이전트의 CLI가 부르는 도구. 앱이 에이전트를 시작할 때 연결 정보를 넣어 준다 (Claude Code는 `--mcp-config`, Codex는 `-c mcp_servers.scheduler.url=...`).
 
@@ -54,3 +55,9 @@
 |---|---|---|
 | `submit_approval` | `title`, `decision`, `background`(선택), `attachments`(선택, 파일 경로 목록) | `{"id": ..., "status": "pending"}` |
 | `get_approval` | `id` | `{"id", "status", "reason", "decided_at"}`. 에이전트는 이걸로 결과를 확인한다 |
+| `list_todos` | `from`·`to`(YYYY-MM-DD), `done` (모두 선택) | 할 일 목록 |
+| `add_todo` | `title`, `due_at`(선택, YYYY-MM-DDTHH:MM) | 만든 할 일 |
+| `update_todo` | `id`, 바꿀 `title`·`due_at`·`done` | 바뀐 할 일 |
+| `delete_todo` | `id` | `{"deleted": id}` |
+
+할 일 도구는 `/api/todos`와 같은 코드를 쓴다. 대시보드는 5초마다 할 일을 다시 불러와 에이전트가 바꾼 것을 보여 준다.
