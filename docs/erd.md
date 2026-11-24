@@ -86,7 +86,7 @@ erDiagram
 | `todos` | 할 일, 일정(달력), 다가오는 일정 | 세 위젯이 같은 테이블을 본다 |
 | `agents` | Agent, 터미널 | 세션 상태(`running` 등)는 DB가 아니라 실행 중인 프로세스로 판단한다 |
 | `approvals` | 결재 대기 | 에이전트가 MCP `submit_approval`로 만든다. UI에서는 상태만 바꾼다 |
-| `mail_accounts` | 메일 검토 (연결 관리) | 처음 연결하면 최근 메일 3통만 가져온다 |
+| `mail_accounts` | 메일 검토 (연결 관리) | 처음 연결하면 최근 메일 10통만 가져온다 |
 | `mails` | 메일 검토 | `status`는 요약 상태, 답장 여부는 `sent_at` |
 | `meta` | (없음) | 스키마 버전. 지금 `1` |
 

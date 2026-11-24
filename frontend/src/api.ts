@@ -31,7 +31,7 @@ export type MailItem = {
   account: string
 }
 export type Mail = MailItem & { body: string; summary: string | null; reply_draft: string | null }
-export type MailAccount = { id: string; label: string; email: string }
+export type MailAccount = { id: string; label: string; email: string; imap_host: string; watch: 'idle' | 'poll' | 'checking' }
 
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const res = await fetch(path, {

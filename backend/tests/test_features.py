@@ -188,3 +188,26 @@ def test_launch_continues_previous_conversation(tmp_path, monkeypatch):
 
     assert "resume" not in read("codex")
     assert "codex resume --last" in read("codex")
+
+
+def test_imap_idle_wakes_on_new_mail():
+    from app.mail import _wait_for_mail
+
+    class FakeConn:
+        def __init__(self, lines):
+            self.lines, self.sent = list(lines), []
+            self.sock = type("S", (), {"settimeout": lambda self, t: None})()
+
+        def _new_tag(self):
+            return b"A1"
+
+        def send(self, data):
+            self.sent.append(data)
+
+        def readline(self):
+            return self.lines.pop(0)
+
+    conn = FakeConn([b"+ idling\r\n", b"* OK still here\r\n", b"* 5 EXISTS\r\n"])
+    assert _wait_for_mail(conn) is True
+    assert conn.sent == [b"A1 IDLE\r\n"]
+    assert _wait_for_mail(FakeConn([b"A1 BAD no idle\r\n"])) is False

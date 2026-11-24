@@ -1,4 +1,4 @@
-"""Mail review: IMAP accounts are polled, new mail is summarized by a tool-less Claude Code run, replies go out by SMTP
+"""Mail review: IMAP accounts are watched with IDLE (polled each minute as a fallback), new mail is summarized by a tool-less Claude Code run, replies go out by SMTP
 only when I press send."""
 
 import email
@@ -12,6 +12,7 @@ import smtplib
 import subprocess
 import tempfile
 import threading
+import time
 from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -23,8 +24,9 @@ from . import db
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
 KEYRING_SERVICE = "Scheduler mail"
-POLL_SECONDS = 60  # ponytail: polling, not IMAP IDLE; switch to IDLE if a minute of delay matters
-FIRST_SYNC_COUNT = 3  # on a new account, only the latest few mails are imported
+POLL_SECONDS = 60  # fallback check; accounts whose server supports IMAP IDLE are woken as soon as mail arrives
+IDLE_SECONDS = 25 * 60  # servers drop an idle connection after ~30 min (RFC 2177), so re-issue IDLE before that
+FIRST_SYNC_COUNT = 10  # on a new account, only the latest few mails are imported (each one is a Claude run)
 
 PRESETS = {
     "gmail": ("imap.gmail.com", 993, "smtp.gmail.com", 465),
@@ -53,8 +55,10 @@ def _imap(account: dict, password: str) -> imaplib.IMAP4_SSL:
 
 @router.get("/accounts")
 def list_accounts() -> list[dict]:
+    """watch: how new mail is noticed. idle = the moment it arrives, poll = every minute, checking = not known yet."""
     with db.connect() as conn:
-        return db.rows(conn.execute("SELECT id, label, email, imap_host, smtp_host, created_at FROM mail_accounts"))
+        rows = db.rows(conn.execute("SELECT id, label, email, imap_host, smtp_host, created_at FROM mail_accounts"))
+    return [{**r, "watch": _watch_mode.get(r["id"], "checking")} for r in rows]
 
 
 @router.post("/accounts", status_code=201)
@@ -214,9 +218,73 @@ def sync_once() -> None:
 
 def run_forever(stop: threading.Event) -> None:
     while not stop.is_set():
+        _start_idle_watchers()
         sync_once()
         _wake.wait(POLL_SECONDS)
         _wake.clear()
+
+
+# ---- IMAP IDLE: the server tells us the moment mail arrives ---------------------------------------
+
+_watchers: dict[str, threading.Thread] = {}
+_watch_mode: dict[str, str] = {}  # account id -> "idle" | "poll", shown in the accounts list
+
+
+def _start_idle_watchers() -> None:
+    """One thread per account; a watcher ends by itself when its account is removed or its server lacks IDLE."""
+    with db.connect() as conn:
+        ids = [r["id"] for r in conn.execute("SELECT id FROM mail_accounts")]
+    for account_id in ids:
+        if account_id not in _watchers or not _watchers[account_id].is_alive():
+            _watchers[account_id] = threading.Thread(target=_idle_watch, args=(account_id,), daemon=True)
+            _watchers[account_id].start()
+
+
+def _idle_watch(account_id: str) -> None:
+    while True:
+        with db.connect() as c:
+            row = c.execute("SELECT * FROM mail_accounts WHERE id = ?", (account_id,)).fetchone()
+        password = keyring.get_password(KEYRING_SERVICE, account_id) if row else None
+        if not password:
+            return  # account removed
+        try:
+            conn = _imap(dict(row), password)
+        except Exception:  # noqa: BLE001 - offline or server hiccup; the minute poll still runs
+            time.sleep(60)
+            continue
+        try:
+            if "IDLE" not in conn.capabilities:
+                _watch_mode[account_id] = "poll"
+                return  # no push on this server: the minute poll covers it
+            _watch_mode[account_id] = "idle"
+            conn.select("INBOX", readonly=True)
+            if _wait_for_mail(conn):
+                sync_now()
+        except TimeoutError:
+            pass  # no mail within IDLE_SECONDS: reconnect and idle again
+        except Exception:  # noqa: BLE001 - dropped connection etc.; back off a little, then reconnect
+            time.sleep(30)
+        finally:
+            try:
+                conn.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _wait_for_mail(conn: imaplib.IMAP4_SSL) -> bool:
+    """Sends IDLE and blocks until the server reports new mail (True). Raises TimeoutError after IDLE_SECONDS.
+    imaplib has no IDLE before Python 3.14, so it is spoken by hand."""
+    tag = conn._new_tag()
+    conn.send(tag + b" IDLE\r\n")
+    if not conn.readline().startswith(b"+"):
+        return False
+    conn.sock.settimeout(IDLE_SECONDS)
+    while True:
+        line = conn.readline()
+        if not line:
+            raise ConnectionError("IMAP connection closed")
+        if line.startswith(b"*") and b"EXISTS" in line:
+            return True  # the connection is closed right after, so DONE is not needed
 
 
 # ---- mails --------------------------------------------------------------------------------------
