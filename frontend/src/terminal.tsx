@@ -15,7 +15,29 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
       fontFamily: "'Cascadia Mono', Consolas, 'D2Coding', monospace",
       fontSize: 13,
       cursorBlink: true,
-      theme: { background: '#1f1f1f', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+      // VS Code Light+ terminal colors: the default ANSI palette (yellow, white) is unreadable on white.
+      theme: {
+        background: '#ffffff',
+        foreground: '#333333',
+        cursor: '#333333',
+        selectionBackground: '#add6ff',
+        black: '#000000',
+        red: '#cd3131',
+        green: '#107c10',
+        yellow: '#949800',
+        blue: '#0451a5',
+        magenta: '#bc05bc',
+        cyan: '#0598bc',
+        white: '#555555',
+        brightBlack: '#666666',
+        brightRed: '#cd3131',
+        brightGreen: '#14ce14',
+        brightYellow: '#b5ba00',
+        brightBlue: '#0451a5',
+        brightMagenta: '#bc05bc',
+        brightCyan: '#0598bc',
+        brightWhite: '#a5a5a5',
+      },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -67,20 +89,20 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
   }, [agent?.id])
 
   return (
-    <aside className="flex min-w-0 flex-[36] flex-col overflow-hidden rounded-xl bg-[#1f1f1f]">
-      <header className="flex items-center gap-2.5 border-b border-neutral-800 bg-neutral-800/60 px-3.5 py-3">
+    <aside className="flex min-w-0 flex-[36] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white">
+      <header className="flex items-center gap-2.5 border-b border-neutral-200 bg-neutral-50 px-3.5 py-3">
         {agent ? (
           <>
             <span className="flex size-6 items-center justify-center rounded-full bg-neutral-600 text-[11px] font-bold text-white">{agent.name.slice(0, 1)}</span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium text-neutral-100">{agent.name}</p>
-              <p className="truncate text-[11px] text-neutral-400">
+              <p className="truncate text-[13px] font-medium text-neutral-900">{agent.name}</p>
+              <p className="truncate text-[11px] text-neutral-500">
                 {CLI_LABEL[agent.cli]} · {agent.cwd}
               </p>
             </div>
           </>
         ) : (
-          <p className="text-sm text-neutral-400">왼쪽 Agent에서 에이전트를 고르면 터미널이 열립니다</p>
+          <p className="text-sm text-neutral-500">왼쪽 Agent에서 에이전트를 고르면 터미널이 열립니다</p>
         )}
       </header>
       <div ref={host} className="min-h-0 flex-1 px-2 py-2" />
