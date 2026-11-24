@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -16,8 +17,15 @@ def _ps_quote(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
+def _has_claude_history(cwd: str) -> bool:
+    """Claude Code saves each folder's conversations as ~/.claude/projects/<cwd, non-alphanumerics -> '-'>/*.jsonl."""
+    # ponytail: mirrors Claude Code's folder naming; if that changes, agents just start a fresh conversation.
+    return any((Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", cwd)).glob("*.jsonl"))
+
+
 def _launch_script(agent: dict, mcp_url: str) -> Path:
-    """Writes the PowerShell script that starts the agent's CLI with the approval MCP server attached."""
+    """Writes the PowerShell script that starts the agent's CLI with the approval MCP server attached.
+    Continues the last conversation in the agent's folder when there is one, so closing the app loses nothing."""
     folder = db.data_dir() / "agents" / agent["id"]
     folder.mkdir(parents=True, exist_ok=True)
     mcp_json = folder / "mcp.json"
@@ -25,9 +33,14 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
 
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
-        lines.append(f"claude --mcp-config {_ps_quote(str(mcp_json))}")
+        cont = " --continue" if _has_claude_history(agent["cwd"]) else ""
+        lines.append(f"claude{cont} --mcp-config {_ps_quote(str(mcp_json))}")
     elif agent["cli"] == "codex":
-        lines.append(f"codex -c \"mcp_servers.scheduler.url='{mcp_url}'\"")
+        # Codex has no cheap "is there a session here?" check, so remember that it was started once.
+        started = folder / "codex-started"
+        resume = " resume --last" if started.exists() else ""
+        started.touch()
+        lines.append(f"codex{resume} -c \"mcp_servers.scheduler.url='{mcp_url}'\"")
     script = folder / "launch.ps1"
     script.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8-sig")
     return script

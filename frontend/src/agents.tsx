@@ -2,6 +2,13 @@ import { useState } from 'react'
 import { api, type Agent } from './api'
 import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
 
+// Injected by the exe window (backend/desktop.py JsApi); absent in a dev browser.
+declare global {
+  interface Window {
+    pywebview?: { api: { pick_folder: () => Promise<string | null> } }
+  }
+}
+
 export const CLI_LABEL: Record<Agent['cli'], string> = { claude: 'Claude Code', codex: 'Codex', shell: 'PowerShell' }
 const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
 
@@ -71,9 +78,15 @@ export function Agents({ agents, selected, onSelect, reload }: { agents: Agent[]
 }
 
 function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agent) => void }) {
-  const [form, setForm] = useState({ name: '', role: '', cli: 'claude' as Agent['cli'], cwd: '' })
+  const [form, setForm] = useState({ name: '', role: '', persona: '', cli: 'claude' as Agent['cli'], cwd: '' })
   const [error, setError] = useState<string | null>(null)
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value })
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm({ ...form, [k]: e.target.value })
+
+  async function pickFolder() {
+    const path = await window.pywebview?.api.pick_folder()
+    if (path) setForm((f) => ({ ...f, cwd: path }))
+  }
 
   async function submit() {
     try {
@@ -109,6 +122,16 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
         <input className={inputClass} value={form.role} onChange={set('role')} placeholder="예: 백엔드 API 작성" />
       </label>
       <label className="flex flex-col gap-1 text-xs font-medium">
+        성격과 일하는 방식
+        <textarea
+          className={`${inputClass} h-24 resize-y`}
+          value={form.persona}
+          onChange={set('persona')}
+          placeholder={'예: 말이 짧고 결론부터 말한다. 확실하지 않으면 추측하지 않고 묻는다.'}
+        />
+        <span className="text-[11px] font-normal text-neutral-500">작업 폴더의 AGENTS.md에 들어갑니다. 나중엔 그 파일을 직접 고치면 됩니다.</span>
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium">
         CLI
         <select className={inputClass} value={form.cli} onChange={set('cli')}>
           <option value="claude">Claude Code</option>
@@ -118,7 +141,14 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
       </label>
       <label className="flex flex-col gap-1 text-xs font-medium">
         작업 폴더
-        <input className={inputClass} value={form.cwd} onChange={set('cwd')} placeholder="비우면 에이전트 전용 폴더를 만듭니다" />
+        <div className="flex gap-2">
+          <input className={`${inputClass} flex-1`} value={form.cwd} onChange={set('cwd')} placeholder="비우면 에이전트 전용 폴더를 만듭니다" />
+          {window.pywebview && (
+            <Button variant="secondary" onClick={pickFolder}>
+              찾아보기
+            </Button>
+          )}
+        </div>
       </label>
       <p className="text-[11px] text-neutral-500">CLI 로그인은 터미널에서 처음 실행될 때 CLI가 직접 안내합니다.</p>
     </Modal>

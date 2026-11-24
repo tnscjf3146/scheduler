@@ -14,6 +14,7 @@ CLIS = ("claude", "codex", "shell")
 class AgentIn(BaseModel):
     name: str = Field(min_length=1, max_length=50)
     role: str = Field(default="", max_length=100)
+    persona: str = Field(default="", max_length=4000)  # goes only into AGENTS.md, which the user edits from then on
     cli: str = Field(pattern="^(claude|codex|shell)$")
     cwd: str | None = None
 
@@ -25,6 +26,10 @@ AGENTS_MD = """# {name}
 - 역할: {role}
 - 작업 폴더: 이 폴더 (`{cwd}`). 만드는 파일은 여기에 둔다.
 - 사용자는 Scheduler 대시보드 오른쪽 터미널에서 너와 대화한다.
+
+## 성격과 일하는 방식
+
+{persona}
 
 ## 결재
 
@@ -42,12 +47,22 @@ AGENTS_MD = """# {name}
 """
 
 
-def _write_instructions(workspace: Path, name: str, role: str) -> None:
-    """AGENTS.md is read by Codex; Claude Code reads CLAUDE.md, which just imports it."""
-    (workspace / "AGENTS.md").write_text(
-        AGENTS_MD.format(name=name, role=role or "(정해지지 않음, 사용자에게 물어본다)", cwd=workspace), encoding="utf-8"
-    )
-    (workspace / "CLAUDE.md").write_text("@AGENTS.md\n", encoding="utf-8")
+def _write_instructions(workspace: Path, name: str, role: str, persona: str) -> None:
+    """AGENTS.md is the one source, read by Codex as is. Claude Code and Gemini CLI read their own file, which imports it.
+    Files that already exist are left alone: a user-chosen folder may be a project with its own."""
+    files = {
+        "AGENTS.md": AGENTS_MD.format(
+            name=name,
+            role=role or "(정해지지 않음, 사용자에게 물어본다)",
+            persona=persona or "(정해지지 않음. 사용자가 이 부분을 직접 채운다)",
+            cwd=workspace,
+        ),
+        "CLAUDE.md": "@AGENTS.md\n",
+        "GEMINI.md": "@AGENTS.md\n",
+    }
+    for file, text in files.items():
+        if not (workspace / file).exists():
+            (workspace / file).write_text(text, encoding="utf-8")
 
 
 def _get(conn, agent_id: str) -> dict:
@@ -68,15 +83,15 @@ def list_agents() -> list[dict]:
 def create(body: AgentIn) -> dict:
     agent_id = db.new_id()
     if body.cwd:
-        cwd = body.cwd
-        if not Path(cwd).is_dir():
+        workspace = Path(body.cwd)
+        if not workspace.is_dir():
             raise HTTPException(400, "작업 폴더가 없습니다")
     else:
         # Own workspace per agent. Kept when the agent is deleted: it may hold the agent's work.
         workspace = db.data_dir() / "agents" / agent_id / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
-        _write_instructions(workspace, body.name.strip(), body.role.strip())
-        cwd = str(workspace)
+    _write_instructions(workspace, body.name.strip(), body.role.strip(), body.persona.strip())
+    cwd = str(workspace)
     with db.connect() as conn:
         conn.execute(
             "INSERT INTO agents (id, name, role, cli, cwd, created_at) VALUES (?, ?, ?, ?, ?, ?)",

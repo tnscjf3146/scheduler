@@ -53,18 +53,23 @@ def test_approval_flow_through_mcp(client, tmp_path):
 
 
 def test_agent_gets_own_workspace(client, tmp_path):
-    a = client.post("/api/agents", json={"name": "a", "cli": "shell"}).json()
+    a = client.post("/api/agents", json={"name": "a", "cli": "shell", "persona": "말이 짧고 꼼꼼하다"}).json()
     b = client.post("/api/agents", json={"name": "b", "cli": "shell"}).json()
     assert a["cwd"] != b["cwd"]
     assert a["cwd"] == str(tmp_path / "agents" / a["id"] / "workspace")
     workspace = tmp_path / "agents" / a["id"] / "workspace"
     assert "submit_approval" in (workspace / "AGENTS.md").read_text(encoding="utf-8")
-    assert (workspace / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
+    assert "말이 짧고 꼼꼼하다" in (workspace / "AGENTS.md").read_text(encoding="utf-8")
+    for shim in ("CLAUDE.md", "GEMINI.md"):
+        assert (workspace / shim).read_text(encoding="utf-8") == "@AGENTS.md\n"
 
     custom = tmp_path / "mine"
     custom.mkdir()
+    (custom / "AGENTS.md").write_text("내 프로젝트 규칙", encoding="utf-8")
     client.post("/api/agents", json={"name": "c", "cli": "shell", "cwd": str(custom)})
-    assert list(custom.iterdir()) == []  # the user's own folder is left alone
+    assert (custom / "AGENTS.md").read_text(encoding="utf-8") == "내 프로젝트 규칙"  # never overwritten
+    assert (custom / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
+    assert (custom / "GEMINI.md").exists()
 
 
 def test_terminal_session_echoes(client, tmp_path):
@@ -89,3 +94,23 @@ def test_parse_html_mail():
     assert mail["sender"] == "Kim <kim@a.com>"
     assert mail["body"].split() == ["Hello", "there"]
     assert mail["received_at"].startswith("2026-11-24T10:12:00")
+
+
+def test_launch_continues_previous_conversation(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from app import sessions
+
+    monkeypatch.setenv("SCHEDULER_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cwd = str(tmp_path / "work")
+    read = lambda cli: sessions._launch_script({"id": cli, "cli": cli, "cwd": cwd}, "http://x/mcp").read_text(encoding="utf-8-sig")
+
+    assert "--continue" not in read("claude")
+    project = tmp_path / ".claude" / "projects" / __import__("re").sub(r"[^A-Za-z0-9]", "-", cwd)
+    project.mkdir(parents=True)
+    (project / "s.jsonl").write_text("{}")
+    assert "claude --continue" in read("claude")
+
+    assert "resume" not in read("codex")
+    assert "codex resume --last" in read("codex")
