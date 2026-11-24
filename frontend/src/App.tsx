@@ -26,7 +26,10 @@ export default function App() {
   return (
     <div className="flex h-full flex-col bg-neutral-100 text-neutral-900">
       <header className="flex items-center gap-4 border-b border-neutral-200 bg-white px-6 py-3.5">
-        <span className="text-base font-bold">Scheduler</span>
+        <span className="flex items-center gap-2 text-base font-bold">
+          <img src="/logo.svg" alt="" className="size-6" />
+          Scheduler
+        </span>
         <span className="ml-auto text-xs text-neutral-500">{api}</span>
       </header>
 

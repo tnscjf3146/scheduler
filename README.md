@@ -44,3 +44,9 @@ cd ..\backend; .venv\Scripts\pyinstaller scheduler.spec --noconfirm
 ```
 
 결과물: `backend\dist\Scheduler.exe`. 실행하면 로컬 포트에 API를 띄우고 앱 창(WebView2)으로 연다.
+
+로고(`frontend/public/logo.svg`)를 바꿨으면 빌드 전에 exe 아이콘을 다시 만든다.
+
+```powershell
+cd frontend; pnpm icon   # -> backend/assets/scheduler.ico
+```

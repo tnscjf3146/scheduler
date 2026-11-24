@@ -14,6 +14,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     name="Scheduler",
+    icon="assets/scheduler.ico",
     console=False,
     upx=False,
 )
