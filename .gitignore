@@ -2,9 +2,8 @@
 __pycache__/
 .venv/
 .pytest_cache/
-backend/build/
-backend/dist/
-installer/dist/
+build/
+dist/
 
 # Node
 node_modules/

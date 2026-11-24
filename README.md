@@ -36,27 +36,25 @@ cd frontend; pnpm dev
 cd backend; .venv\Scripts\python -m pytest -q
 ```
 
-## exe 빌드
+## 빌드 (exe, 설치 파일)
+
+필요: 위 세팅, [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup --scope user`)
 
 ```powershell
-cd frontend; pnpm build
-cd ..\backend; .venv\Scripts\pyinstaller scheduler.spec --noconfirm
+.\build.ps1
 ```
 
-결과물: `backend\dist\Scheduler.exe`. 실행하면 로컬 포트에 API를 띄우고 앱 창(WebView2)으로 연다.
+결과물은 `dist\`에 모인다.
+
+| 파일 | 내용 |
+|---|---|
+| `Scheduler.exe` | 설치 없이 바로 실행하는 앱. 로컬 포트에 API를 띄우고 앱 창(WebView2)으로 연다 |
+| `Scheduler-Setup-<버전>.exe` | 설치 파일. 관리자 권한 없이 `%LOCALAPPDATA%\Programs\Scheduler`에 설치하고 시작 메뉴·바탕화면 바로 가기와 제거 기능을 만든다. 제거해도 `%APPDATA%\Scheduler`의 데이터는 남긴다 |
+
+버전은 `installer/scheduler.iss`의 `AppVersion`에서 바꾼다.
 
 로고(`frontend/public/logo.svg`)를 바꿨으면 빌드 전에 exe 아이콘을 다시 만든다.
 
 ```powershell
 cd frontend; pnpm icon   # -> backend/assets/scheduler.ico
 ```
-
-## 설치 파일
-
-exe를 먼저 빌드한 뒤 [Inno Setup 6](https://jrsoftware.org/isinfo.php)으로 만든다. 설치는 `winget install JRSoftware.InnoSetup --scope user`.
-
-```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\scheduler.iss
-```
-
-결과물: `installer\dist\Scheduler-Setup-<버전>.exe`. 관리자 권한 없이 `%LOCALAPPDATA%\Programs\Scheduler`에 설치하고, 시작 메뉴·바탕화면 바로 가기와 제거 기능을 만든다. 제거해도 `%APPDATA%\Scheduler`의 데이터는 남긴다. 버전은 `installer/scheduler.iss`의 `AppVersion`에서 바꾼다.

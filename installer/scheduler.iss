@@ -1,6 +1,4 @@
-; Build the exe first (see README), then:
-;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\scheduler.iss
-; Output: installer\dist\Scheduler-Setup-<version>.exe
+; Built by ..\build.ps1 after the exe. Output: dist\Scheduler-Setup-<version>.exe
 
 #define AppName "Scheduler"
 #define AppVersion "0.1.0"
@@ -16,7 +14,7 @@ PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-OutputDir=dist
+OutputDir=..\dist
 OutputBaseFilename=Scheduler-Setup-{#AppVersion}
 SetupIconFile=..\backend\assets\scheduler.ico
 UninstallDisplayIcon={app}\Scheduler.exe
@@ -31,7 +29,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\backend\dist\Scheduler.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Scheduler.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\Scheduler.exe"

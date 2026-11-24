@@ -1,4 +1,4 @@
-# Build: cd frontend && pnpm build, then cd backend && .venv\Scripts\pyinstaller scheduler.spec
+# Built by ..\build.ps1 (frontend first; output goes to ..\dist)
 from PyInstaller.utils.hooks import collect_submodules
 
 a = Analysis(
