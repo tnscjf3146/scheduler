@@ -1,54 +1,67 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { Agents } from './agents'
+import { api, type Agent, type Todo } from './api'
+import { Approvals } from './approvals'
+import { MailReview } from './mail'
+import { TerminalPanel } from './terminal'
+import { Calendar, Todos, Upcoming } from './todos'
 
-function Widget({ title, children }: { title: string; children?: ReactNode }) {
+function Clock() {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
+  const day = ['일', '월', '화', '수', '목', '금', '토'][now.getDay()]
+  const time = now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-xl border border-neutral-200 bg-white p-3.5">
-      <h2 className="text-sm font-bold text-neutral-900">{title}</h2>
-      {children}
-    </section>
+    <span className="text-[13px] text-neutral-500">
+      {now.getMonth() + 1}월 {now.getDate()}일 ({day}) · {time}
+    </span>
   )
 }
 
-function Column({ width, children }: { width: string; children: ReactNode }) {
-  return <div className={`flex min-h-0 flex-col gap-4 ${width}`}>{children}</div>
-}
-
 export default function App() {
-  const [api, setApi] = useState('연결 확인 중')
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const loadTodos = useCallback(() => api<Todo[]>('/api/todos').then(setTodos, () => {}), [])
+  const loadAgents = useCallback(() => api<Agent[]>('/api/agents').then(setAgents, () => {}), [])
 
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then(() => setApi('API 연결됨'))
-      .catch(() => setApi('API 연결 안 됨'))
-  }, [])
+    loadTodos()
+    loadAgents()
+    const timer = setInterval(loadAgents, 5_000) // session status changes on its own (CLI exits etc.)
+    return () => clearInterval(timer)
+  }, [loadTodos, loadAgents])
+
+  const agent = agents.find((a) => a.id === selected) ?? null
 
   return (
     <div className="flex h-full flex-col bg-neutral-100 text-neutral-900">
-      <header className="flex items-center gap-4 border-b border-neutral-200 bg-white px-6 py-3.5">
+      <header className="flex items-center gap-4 border-b border-neutral-200 bg-white px-6 py-3">
         <span className="flex items-center gap-2 text-base font-bold">
           <img src="/logo.svg" alt="" className="size-6" />
           Scheduler
         </span>
-        <span className="ml-auto text-xs text-neutral-500">{api}</span>
+        <Clock />
       </header>
 
       <main className="flex min-h-0 flex-1 gap-4 p-4">
-        <Column width="w-[300px]">
-          <Widget title="다가오는 일정" />
-          <Widget title="Agent" />
-        </Column>
-        <Column width="w-[380px]">
-          <Widget title="할 일" />
-          <Widget title="일정 (달력)" />
-        </Column>
-        <Column width="w-[320px]">
-          <Widget title="메일 검토" />
-          <Widget title="결재 대기" />
-        </Column>
-        <aside className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-neutral-900">
-          <div className="border-b border-neutral-800 px-3.5 py-3 text-sm text-neutral-400">에이전트를 선택하세요</div>
-        </aside>
+        <div className="flex w-[300px] min-h-0 shrink-0 flex-col gap-4">
+          <Upcoming todos={todos} />
+          <Agents agents={agents} selected={selected} onSelect={setSelected} reload={loadAgents} />
+        </div>
+        <div className="flex w-[380px] min-h-0 shrink-0 flex-col gap-4">
+          <Todos todos={todos} reload={loadTodos} />
+          <Calendar todos={todos} />
+        </div>
+        <div className="flex w-[320px] min-h-0 shrink-0 flex-col gap-4">
+          <MailReview />
+          <Approvals />
+        </div>
+        <TerminalPanel agent={agent} onStatus={loadAgents} />
       </main>
     </div>
   )

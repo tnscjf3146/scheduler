@@ -8,7 +8,23 @@
 | `frontend/` | React + TypeScript + Vite + Tailwind |
 | `docs/` | 기획서, 유저플로우, ERD, API |
 
-데이터는 `%APPDATA%\Scheduler\scheduler.db`에 저장된다.
+데이터는 `%APPDATA%\Scheduler\scheduler.db`에 저장된다. 메일 비밀번호는 Windows 자격 증명 관리자에 저장된다.
+
+## 기능
+
+| 위젯 | 하는 일 |
+|---|---|
+| 다가오는 일정 | 날짜가 지나지 않은 할 일을 가까운 순으로 |
+| Agent | 역할별 에이전트. 에이전트 하나 = 터미널 세션 하나 (Claude Code · Codex · PowerShell). 누르면 오른쪽 터미널이 그 세션으로 바뀐다 |
+| 할 일 · 일정(달력) | 할 일 추가·완료·삭제, 날짜가 있으면 달력에 표시 |
+| 메일 검토 | IMAP으로 1분마다 새 메일 확인 → AI 요약 제목·요약·답장 초안. 전송은 버튼을 눌러야만 |
+| 결재 대기 | 에이전트가 MCP 도구(`submit_approval`)로 올린 결재 문서를 승인·반려. 결과는 `get_approval`로 에이전트가 확인 |
+
+필요한 것:
+
+- **Claude Code CLI** (`claude`): 메일 요약과 Claude Code 에이전트에 쓴다. 로그인은 CLI가 처음 실행될 때 직접 한다.
+- **Codex CLI** (`codex`): Codex 에이전트를 쓸 때만.
+- **메일 앱 비밀번호**: Gmail은 2단계 인증 후 "앱 비밀번호", 네이버는 메일 환경설정에서 IMAP/SMTP를 켜고 (2단계 인증 시) 애플리케이션 비밀번호.
 
 ## 처음 세팅
 
@@ -26,7 +42,7 @@ pnpm install
 터미널 두 개에서 실행하고 브라우저로 http://localhost:5173 을 연다. `/api` 요청은 Vite가 8000번으로 넘긴다.
 
 ```powershell
-cd backend;  .venv\Scripts\uvicorn app.main:app --reload --port 8000
+cd backend;  .venv\Scripts\uvicorn app.main:app --reload --reload-dir app --port 8000
 cd frontend; pnpm dev
 ```
 

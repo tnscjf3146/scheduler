@@ -1,5 +1,7 @@
 import os
 import sqlite3
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 
@@ -12,15 +14,91 @@ def data_dir() -> Path:
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(data_dir() / "scheduler.db")
+    conn = sqlite3.connect(data_dir() / "scheduler.db", timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")  # UI, mail watcher and agents write at the same time
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
+def new_id() -> str:
+    return uuid.uuid4().hex
+
+
+def now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS todos (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    due_at TEXT,                         -- local time 'YYYY-MM-DDTHH:MM', NULL = no date
+    done INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT '',
+    cli TEXT NOT NULL,                   -- 'claude' | 'codex' | 'shell'
+    cwd TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approvals (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    agent_name TEXT NOT NULL,            -- kept even if the agent is deleted later
+    title TEXT NOT NULL,
+    background TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL,
+    attachments TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mail_accounts (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    email TEXT NOT NULL,
+    imap_host TEXT NOT NULL,
+    imap_port INTEGER NOT NULL,
+    smtp_host TEXT NOT NULL,
+    smtp_port INTEGER NOT NULL,
+    last_uid INTEGER,                    -- password lives in Windows Credential Manager, not here
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mails (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+    uid INTEGER NOT NULL,
+    message_id TEXT,
+    sender TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    body TEXT NOT NULL,
+    summary_title TEXT,
+    summary TEXT,
+    reply_draft TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | ready | failed
+    sent_at TEXT,
+    UNIQUE (account_id, uid)
+);
+"""
+
+
 def init() -> None:
-    # Tables are added here as each feature is built.
     with connect() as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.executescript(SCHEMA)
         conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')")
+
+
+def rows(cursor) -> list[dict]:
+    return [dict(r) for r in cursor.fetchall()]

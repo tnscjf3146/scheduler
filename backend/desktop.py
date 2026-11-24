@@ -1,11 +1,13 @@
 """exe entry point: run the API on a free local port and open it in a native window."""
 
+import os
 import socket
 import threading
 
 import uvicorn
 import webview
 
+from app import sessions
 from app.main import app
 
 
@@ -23,7 +25,10 @@ def main() -> None:
 
     webview.create_window("Scheduler", f"http://127.0.0.1:{port}", width=1440, height=900, min_size=(1100, 700))
     webview.start()  # blocks until the window closes
-    server.should_exit = True
+    sessions.stop_all()  # end agent terminals with the window
+    # Leftover pty reader / WinForms threads otherwise keep the process alive after the window is gone.
+    # Nothing is lost: every database write is already committed.
+    os._exit(0)
 
 
 if __name__ == "__main__":

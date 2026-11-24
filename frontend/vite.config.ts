@@ -6,6 +6,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     // dev: FastAPI runs on 8000 (uvicorn app.main:app --reload)
-    proxy: { '/api': 'http://127.0.0.1:8000' },
+    proxy: { '/api': { target: 'http://127.0.0.1:8000', ws: true } }, // ws: agent terminals
   },
 })

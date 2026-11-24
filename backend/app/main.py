@@ -1,11 +1,13 @@
+import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import agents, approvals, db, mail, sessions, todos
 
 
 def frontend_dist() -> Path:
@@ -17,10 +19,18 @@ def frontend_dist() -> Path:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init()
+    stop = threading.Event()
+    if not os.environ.get("SCHEDULER_NO_MAIL_SYNC"):
+        threading.Thread(target=mail.run_forever, args=(stop,), daemon=True).start()
     yield
+    stop.set()
+    mail.sync_now()
+    sessions.stop_all()
 
 
 app = FastAPI(title="Scheduler", lifespan=lifespan)
+for module in (todos, agents, approvals, mail):
+    app.include_router(module.router)
 
 
 @app.get("/api/health")
@@ -30,6 +40,6 @@ def health() -> dict:
     return {"status": "ok", "schema_version": version}
 
 
-# Mounted last so /api routes win. Missing in dev (Vite serves the UI on its own port).
+# Mounted last so /api and /mcp routes win. Missing in dev (Vite serves the UI on its own port).
 if frontend_dist().is_dir():
     app.mount("/", StaticFiles(directory=frontend_dist(), html=True), name="frontend")
