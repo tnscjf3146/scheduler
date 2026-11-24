@@ -34,11 +34,17 @@ def list_agents() -> list[dict]:
 
 @router.post("", status_code=201)
 def create(body: AgentIn) -> dict:
-    cwd = body.cwd or str(Path.home())
-    if not Path(cwd).is_dir():
-        raise HTTPException(400, "작업 폴더가 없습니다")
+    agent_id = db.new_id()
+    if body.cwd:
+        cwd = body.cwd
+        if not Path(cwd).is_dir():
+            raise HTTPException(400, "작업 폴더가 없습니다")
+    else:
+        # Own workspace per agent. Kept when the agent is deleted: it may hold the agent's work.
+        workspace = db.data_dir() / "agents" / agent_id / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        cwd = str(workspace)
     with db.connect() as conn:
-        agent_id = db.new_id()
         conn.execute(
             "INSERT INTO agents (id, name, role, cli, cwd, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (agent_id, body.name.strip(), body.role.strip(), body.cli, cwd, db.now()),

@@ -118,7 +118,7 @@ function AddAgent({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Agen
       </label>
       <label className="flex flex-col gap-1 text-xs font-medium">
         작업 폴더
-        <input className={inputClass} value={form.cwd} onChange={set('cwd')} placeholder="비우면 사용자 폴더" />
+        <input className={inputClass} value={form.cwd} onChange={set('cwd')} placeholder="비우면 에이전트 전용 폴더를 만듭니다" />
       </label>
       <p className="text-[11px] text-neutral-500">CLI 로그인은 터미널에서 처음 실행될 때 CLI가 직접 안내합니다.</p>
     </Modal>

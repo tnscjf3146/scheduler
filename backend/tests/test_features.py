@@ -52,6 +52,14 @@ def test_approval_flow_through_mcp(client, tmp_path):
     assert json.loads(got["result"]["content"][0]["text"])["reason"] == "단가 확인"
 
 
+def test_agent_gets_own_workspace(client, tmp_path):
+    a = client.post("/api/agents", json={"name": "a", "cli": "shell"}).json()
+    b = client.post("/api/agents", json={"name": "b", "cli": "shell"}).json()
+    assert a["cwd"] != b["cwd"]
+    assert a["cwd"] == str(tmp_path / "agents" / a["id"] / "workspace")
+    assert (tmp_path / "agents" / a["id"] / "workspace").is_dir()
+
+
 def test_terminal_session_echoes(client, tmp_path):
     agent = client.post("/api/agents", json={"name": "셸", "cli": "shell", "cwd": str(tmp_path)}).json()
     with client.websocket_connect(f"/api/agents/{agent['id']}/terminal?cols=80&rows=24") as ws:

@@ -20,7 +20,7 @@
 | 할 일 | DELETE | `/api/todos/{id}` | 삭제 |
 | 다가오는 일정 | GET | `/api/todos/upcoming` | 안 했고 날짜가 지나지 않은 할 일, 가까운 순 5개 |
 | Agent | GET | `/api/agents` | 목록. `status`: `stopped` · `running` · `exited` |
-| Agent | POST | `/api/agents` | 추가. `name`, `role`, `cli`(`claude` · `codex` · `shell`), `cwd` |
+| Agent | POST | `/api/agents` | 추가. `name`, `role`, `cli`(`claude` · `codex` · `shell`), `cwd`(비우면 `%APPDATA%\Scheduler\agents\{id}\workspace`를 만들어 씀) |
 | Agent | POST | `/api/agents/{id}/restart` | 터미널 세션 종료. 다음에 열면 새로 시작 |
 | Agent | DELETE | `/api/agents/{id}` | 삭제 (세션도 종료) |
 | 결재 대기 | GET | `/api/approvals?status=pending` | 결재 문서 목록 |
