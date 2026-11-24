@@ -1,12 +1,12 @@
 # scheduler
 
-나와 에이전트(터미널 세션)가 함께 일하는 개인용 대시보드 exe. 기획은 [docs/plan.md](docs/plan.md).
+나와 에이전트(터미널 세션)가 함께 일하는 개인용 대시보드 exe. 기획은 [docs/plan.md](docs/plan.md), 지금 되는 것·안 되는 것은 [docs/features.md](docs/features.md).
 
 | 폴더 | 내용 |
 |---|---|
 | `backend/` | FastAPI + SQLite, exe 진입점(`desktop.py`) |
 | `frontend/` | React + TypeScript + Vite + Tailwind |
-| `docs/` | 기획서, 유저플로우, ERD, API |
+| `docs/` | 기획서, 유저플로우, 기능, ERD, API |
 
 데이터는 `%APPDATA%\Scheduler\scheduler.db`에 저장된다. 메일 비밀번호는 Windows 자격 증명 관리자에 저장된다.
 
