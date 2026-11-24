@@ -18,6 +18,38 @@ class AgentIn(BaseModel):
     cwd: str | None = None
 
 
+AGENTS_MD = """# {name}
+
+너는 Scheduler 앱 안에서 일하는 에이전트 '{name}'이다.
+
+- 역할: {role}
+- 작업 폴더: 이 폴더 (`{cwd}`). 만드는 파일은 여기에 둔다.
+- 사용자는 Scheduler 대시보드 오른쪽 터미널에서 너와 대화한다.
+
+## 결재
+
+사용자가 정해야 하는 일이 생기면 혼자 정하지 말고 `scheduler` MCP 서버의 도구로 결재를 올린다.
+
+- 결재가 필요한 일: 밖으로 나가는 것(클라이언트에게 보낼 내용, 제출물 확정), 되돌리기 어려운 것, 방향을 정하는 것.
+- 결재가 필요 없는 일: 명령 실행 허락. 그건 CLI가 따로 묻는다.
+- `submit_approval`: `title`(제목), `decision`(사용자가 승인/반려할 질문), `background`(지금까지 한 일), `attachments`(파일 경로 목록).
+- `get_approval`: 받은 `id`로 결과를 확인한다. `pending`이면 아직 대기, `approved`면 진행, `rejected`면 `reason`을 읽고 고친다.
+- 결과는 자동으로 오지 않는다. 사용자가 "결재 확인해"라고 하거나 다음 단계로 넘어가기 전에 직접 확인한다.
+
+## 할 수 없는 것
+
+할 일, 달력, 메일에는 접근할 수 없다. 필요하면 사용자에게 부탁한다.
+"""
+
+
+def _write_instructions(workspace: Path, name: str, role: str) -> None:
+    """AGENTS.md is read by Codex; Claude Code reads CLAUDE.md, which just imports it."""
+    (workspace / "AGENTS.md").write_text(
+        AGENTS_MD.format(name=name, role=role or "(정해지지 않음, 사용자에게 물어본다)", cwd=workspace), encoding="utf-8"
+    )
+    (workspace / "CLAUDE.md").write_text("@AGENTS.md\n", encoding="utf-8")
+
+
 def _get(conn, agent_id: str) -> dict:
     row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
     if not row:
@@ -43,6 +75,7 @@ def create(body: AgentIn) -> dict:
         # Own workspace per agent. Kept when the agent is deleted: it may hold the agent's work.
         workspace = db.data_dir() / "agents" / agent_id / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
+        _write_instructions(workspace, body.name.strip(), body.role.strip())
         cwd = str(workspace)
     with db.connect() as conn:
         conn.execute(

@@ -27,6 +27,7 @@
 - 에이전트 하나 = 터미널 세션 하나. 종류는 `claude`(Claude Code), `codex`(Codex), `shell`(PowerShell만).
 - 에이전트를 누르면 오른쪽 터미널이 그 세션으로 바뀐다. 다른 에이전트로 갔다 와도 세션은 그대로다.
 - 에이전트를 추가할 때 작업 폴더를 비우면 에이전트 전용 폴더 `%APPDATA%\Scheduler\agents\{id}\workspace`를 만들어 준다. 경로는 터미널 위쪽에 보인다. 에이전트를 삭제해도 이 폴더는 남긴다(작업 결과가 있을 수 있어서).
+- 전용 폴더에는 `AGENTS.md`(이름·역할·결재 도구 쓰는 법)와 `CLAUDE.md`(`@AGENTS.md` 한 줄)를 넣어 준다. Codex는 `AGENTS.md`를, Claude Code는 `CLAUDE.md`를 읽는다. 작업 폴더를 직접 지정하면 그 폴더에는 아무것도 쓰지 않는다.
 - 세션은 `작업 폴더(cwd)`에서 PowerShell을 띄우고 CLI를 실행한다. Claude Code·Codex에는 결재용 MCP 서버(`scheduler`)를 자동으로 붙인다.
 
 | 할 수 있는 것 | 할 수 없는 것 |

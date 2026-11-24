@@ -57,7 +57,14 @@ def test_agent_gets_own_workspace(client, tmp_path):
     b = client.post("/api/agents", json={"name": "b", "cli": "shell"}).json()
     assert a["cwd"] != b["cwd"]
     assert a["cwd"] == str(tmp_path / "agents" / a["id"] / "workspace")
-    assert (tmp_path / "agents" / a["id"] / "workspace").is_dir()
+    workspace = tmp_path / "agents" / a["id"] / "workspace"
+    assert "submit_approval" in (workspace / "AGENTS.md").read_text(encoding="utf-8")
+    assert (workspace / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
+
+    custom = tmp_path / "mine"
+    custom.mkdir()
+    client.post("/api/agents", json={"name": "c", "cli": "shell", "cwd": str(custom)})
+    assert list(custom.iterdir()) == []  # the user's own folder is left alone
 
 
 def test_terminal_session_echoes(client, tmp_path):
