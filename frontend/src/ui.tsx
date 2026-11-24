@@ -1,13 +1,19 @@
 import { useEffect, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
-export function Widget({ title, action, children }: { title: ReactNode; action?: ReactNode; children?: ReactNode }) {
+/**
+ * top: stays put above the scrolling body (e.g. an add form).
+ * fade: blur the top/bottom edge while the list scrolls. Off for content that is not a list (the calendar).
+ */
+export function Widget({ title, action, top, children, fade = true }: { title: ReactNode; action?: ReactNode; top?: ReactNode; children?: ReactNode; fade?: boolean }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-xl border border-neutral-200 bg-white p-3.5">
       <header className="flex items-center justify-between">
         <h2 className="text-sm font-bold text-neutral-900">{title}</h2>
         {action}
       </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">{children}</div>
+      {top}
+      <div className={`${fade ? 'scroll-fade' : ''} scroll-hover flex min-h-0 flex-1 flex-col gap-2`}>{children}</div>
     </section>
   )
 }
@@ -43,7 +49,8 @@ export function Modal({ title, onClose, children, footer }: { title: ReactNode; 
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  return (
+  // Rendered on <body>: widgets clip their content (scroll mask, hidden overflow), which would trap a popup inside them.
+  return createPortal(
     <div className={POPUP_BACKDROP} onMouseDown={onClose}>
       <div className={`flex ${POPUP_SIZE} flex-col overflow-hidden rounded-xl bg-white shadow-xl`} onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-start gap-3 px-6 pt-5 pb-4">
@@ -52,10 +59,11 @@ export function Modal({ title, onClose, children, footer }: { title: ReactNode; 
             ✕
           </button>
         </header>
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-5">{children}</div>
+        <div className="scroll-fade scroll-hover flex min-h-0 flex-1 flex-col gap-4 px-6 pb-5">{children}</div>
         {footer && <footer className="flex items-center gap-2 bg-neutral-100 px-6 py-3">{footer}</footer>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

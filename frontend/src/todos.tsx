@@ -14,7 +14,7 @@ export function Upcoming({ todos, onOpen }: { todos: Todo[]; onOpen: (id: string
       {items.length === 0 && <Empty>다가오는 일정이 없습니다</Empty>}
       {byDay(items).map(([day, dayItems]) => (
         <section key={day} className="ml-1.5 border-l-2 border-neutral-200 pl-3">
-          <h3 className="-ml-[19px] flex items-center gap-2 py-1 text-xs font-bold">
+          <h3 className="-ml-[19px] flex items-center gap-2 py-1 text-xs font-semibold text-neutral-400">
             <span className={`size-3 shrink-0 rounded-full border-2 ${day === dateKey(new Date()) ? 'border-white bg-neutral-800 ring-1 ring-neutral-800' : 'border-neutral-400 bg-white'}`} />
             {dayLabel(day)}
           </h3>
@@ -72,17 +72,21 @@ export function Todos({ todos, reload, onOpen }: { todos: Todo[]; reload: () => 
           {tab(true, '완료한 일')}
         </span>
       }
+      top={
+        !showDone && (
+          <>
+            <form onSubmit={add} className="flex gap-2">
+              <input className={`${inputClass} min-w-0 flex-1`} placeholder={`할 일 제목 (${TITLE_MAX}자까지)`} maxLength={TITLE_MAX} value={title} onChange={(e) => setTitle(e.target.value)} />
+              <input className={`${inputClass} w-[150px]`} type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+              <Button type="submit" disabled={!title.trim()}>
+                추가
+              </Button>
+            </form>
+            <ErrorText error={error} />
+          </>
+        )
+      }
     >
-      {!showDone && (
-        <form onSubmit={add} className="flex gap-2">
-          <input className={`${inputClass} min-w-0 flex-1`} placeholder={`할 일 제목 (${TITLE_MAX}자까지)`} maxLength={TITLE_MAX} value={title} onChange={(e) => setTitle(e.target.value)} />
-          <input className={`${inputClass} w-[150px]`} type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
-          <Button type="submit" disabled={!title.trim()}>
-            추가
-          </Button>
-        </form>
-      )}
-      <ErrorText error={error} />
       {shown.length === 0 && <Empty>{showDone ? '완료한 일이 없습니다' : '할 일이 없습니다'}</Empty>}
       {/* Date on its own line, that day's todos indented under it. */}
       <div className="flex flex-col gap-2">
@@ -106,7 +110,7 @@ export function Todos({ todos, reload, onOpen }: { todos: Todo[]; reload: () => 
                     </span>
                   )}
                   {t.due_at && <span className="shrink-0 text-[11px] text-neutral-500">{t.due_at.slice(11, 16)}</span>}
-                  <button onClick={() => remove(t)} className="invisible text-xs text-neutral-400 group-hover:visible hover:text-neutral-800" aria-label="삭제">
+                  <button onClick={() => remove(t)} className="invisible mr-2 text-xs text-neutral-400 group-hover:visible hover:text-neutral-800" aria-label="삭제">
                     ✕
                   </button>
                 </div>
@@ -243,7 +247,7 @@ export function TodoDetail({ todo, onClose, reload }: { todo: Todo; onClose: () 
               </span>
             )}
           </h3>
-          <div className="flex min-h-0 flex-col overflow-y-auto rounded-lg border border-neutral-200 bg-white">
+          <div className="scroll-fade scroll-hover flex min-h-0 flex-col rounded-lg border border-neutral-200 bg-white">
             {todo.subtasks.map((s, i) => (
               <div key={i} className="group flex items-center gap-2.5 border-b border-neutral-100 px-3.5 py-2.5">
                 <input
@@ -321,7 +325,7 @@ export function Calendar({ todos }: { todos: Todo[] }) {
   const shift = (n: number) => setMonth(new Date(month.getFullYear(), month.getMonth() + n, 1))
 
   return (
-    <Widget title="일정 (달력)">
+    <Widget title="일정 (달력)" fade={false}>
       <div className="flex items-center justify-between">
         <button onClick={() => shift(-1)} className="px-2 text-neutral-400 hover:text-neutral-900" aria-label="이전 달">
           ‹
