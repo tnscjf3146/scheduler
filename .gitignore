@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+backend/build/
+backend/dist/
+
+# Node
+node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
