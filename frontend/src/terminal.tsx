@@ -21,6 +21,18 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
     term.loadAddon(fit)
     term.open(host.current)
     fit.fit()
+    // Like Windows Terminal: Ctrl+C copies when text is selected, otherwise it still interrupts.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyC' && term.hasSelection()) {
+        if (e.type === 'keydown') {
+          navigator.clipboard.writeText(term.getSelection())
+          term.clearSelection()
+        }
+        e.preventDefault()
+        return false
+      }
+      return true
+    })
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(`${proto}://${location.host}/api/agents/${agent.id}/terminal?cols=${term.cols}&rows=${term.rows}`)
