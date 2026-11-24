@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 backend/build/
 backend/dist/
+installer/dist/
 
 # Node
 node_modules/
