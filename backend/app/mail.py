@@ -73,8 +73,14 @@ def add_account(body: AccountIn) -> dict:
                "imap_host": imap_host, "imap_port": imap_port, "smtp_host": smtp_host, "smtp_port": smtp_port}
     try:
         _imap(account, body.password).logout()
-    except Exception as e:  # noqa: BLE001 - shown to the user as the reason the account could not be added
-        raise HTTPException(400, f"메일 서버에 로그인하지 못했습니다: {e}")
+    except imaplib.IMAP4.error:  # the server answered but refused the login
+        raise HTTPException(
+            400,
+            "로그인하지 못했습니다. 메일 주소와 앱 비밀번호를 확인하세요. "
+            "Gmail은 계정 비밀번호가 아니라 앱 비밀번호를, 네이버는 메일 환경설정에서 IMAP/SMTP를 켜야 합니다.",
+        )
+    except Exception:  # noqa: BLE001 - DNS, refused port, timeout, TLS: the server could not be reached
+        raise HTTPException(400, "메일 서버에 연결하지 못했습니다. 인터넷 연결과 서버 주소·포트를 확인하세요.")
     keyring.set_password(KEYRING_SERVICE, account["id"], body.password)
     with db.connect() as conn:
         conn.execute(

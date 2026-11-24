@@ -19,19 +19,23 @@ export function MailReview() {
   return (
     <Widget title="메일 검토" action={<LinkButton onClick={() => setManaging(true)}>연결 관리</LinkButton>}>
       {items.length === 0 && <Empty>메일 계정을 연결하면 새 메일이 요약되어 여기에 나옵니다</Empty>}
-      {items.map((m) => (
-        <button key={m.id} onClick={() => setOpen(m.id)} className="flex flex-col gap-0.5 rounded-md bg-neutral-100 px-3 py-2.5 text-left hover:bg-neutral-200">
-          <span className="truncate text-[13px] font-medium">{m.summary_title ?? m.subject}</span>
-          <span className="flex items-center gap-1.5 text-[11px] text-neutral-500">
-            <span className="truncate">
-              {m.account} · {senderName(m.sender)} · {formatWhen(m.received_at)}
-            </span>
+      {/* One line per mail: title, status tags, time. Sender and account are in the tooltip and the detail popup. */}
+      <div className="divide-y divide-neutral-100">
+        {items.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setOpen(m.id)}
+            title={`${m.summary_title ?? m.subject}\n${senderName(m.sender)} · ${m.account}`}
+            className="flex w-full items-center gap-2 py-2 text-left hover:underline"
+          >
+            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{m.summary_title ?? m.subject}</span>
             {m.status === 'pending' && <Tag>요약 중</Tag>}
             {m.status === 'failed' && <Tag>요약 실패</Tag>}
             {m.sent_at && <Tag>답장함</Tag>}
-          </span>
-        </button>
-      ))}
+            <span className="mr-2 shrink-0 text-[11px] text-neutral-500">{formatWhen(m.received_at)}</span>
+          </button>
+        ))}
+      </div>
       {open && <MailDetail id={open} onClose={() => setOpen(null)} onSent={load} />}
       {managing && <Accounts onClose={() => setManaging(false)} onChanged={load} />}
     </Widget>
@@ -112,6 +116,68 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
 
 const PROVIDER_LABEL: Record<string, string> = { 'imap.gmail.com': 'Gmail', 'imap.naver.com': '네이버' }
 const WATCH_LABEL: Record<MailAccount['watch'], string> = { idle: '실시간', poll: '1분마다', checking: '확인 중' }
+
+/** How to get the app password for the chosen provider. Menu names follow each service's screens as of 2025-2026. */
+const PASSWORD_STEPS: Record<string, { title: string; steps: string[]; note: string }> = {
+  gmail: {
+    title: 'Gmail 앱 비밀번호 만드는 법',
+    steps: [
+      'Gmail 메일함이 아니라 Google 계정 화면에서 합니다. 주소창에 myaccount.google.com/security 를 입력하거나, Gmail 오른쪽 위 프로필 사진 → "Google 계정 관리" → 왼쪽 "보안"으로 갑니다. 여기서 "2단계 인증"을 켭니다. 이게 켜져 있어야 앱 비밀번호를 만들 수 있습니다.',
+      '브라우저 주소창에 myaccount.google.com/apppasswords 를 입력해 들어갑니다. (보안 메뉴에서 안 보이면 이 주소로 바로 들어가면 됩니다.)',
+      '앱 이름에 "Scheduler"처럼 아무 이름이나 적고 "만들기"를 누릅니다.',
+      '화면에 나온 16자리 비밀번호를 복사해 위 "앱 비밀번호" 칸에 붙여 넣습니다. 이 창을 닫으면 다시 볼 수 없으니 바로 붙여 넣으세요. (띄어쓰기는 있어도 없어도 됩니다.)',
+    ],
+    note: 'Gmail 계정 비밀번호로는 연결되지 않습니다. IMAP은 Gmail에서 따로 켤 필요가 없습니다.',
+  },
+  naver: {
+    title: '네이버 애플리케이션 비밀번호 만드는 법',
+    steps: [
+      '네이버 메일(mail.naver.com) → 왼쪽 아래 "환경설정" → "POP3/IMAP 설정" → "IMAP/SMTP 설정" 탭에서 "사용함"을 고르고 저장합니다.',
+      '네이버 "내정보"(nid.naver.com) → "보안설정"에서 "2단계 인증"을 켭니다. 알림을 받을 휴대폰을 고르고, 휴대폰에서 승인하면 됩니다.',
+      '같은 "2단계 인증" 관리 화면에서 "애플리케이션 비밀번호 관리"로 들어가, 종류를 고르거나 "Scheduler"처럼 이름을 적고 "생성하기"를 누릅니다.',
+      '나온 비밀번호를 복사해 위 "앱 비밀번호" 칸에 붙여 넣습니다. 메일 주소는 id@naver.com 처럼 전체를 적습니다.',
+    ],
+    note: '2025년 6월부터 네이버는 메일 앱 연결에 2단계 인증과 애플리케이션 비밀번호가 필수입니다. 네이버 로그인 비밀번호로는 연결되지 않습니다.',
+  },
+  custom: {
+    title: '회사 메일 등 직접 입력',
+    steps: [
+      '메일 관리자나 메일 서비스 안내에서 IMAP 서버·포트(보통 993)와 SMTP 서버·포트(보통 465)를 확인해 아래 칸에 적습니다.',
+      '앱 비밀번호를 따로 쓰는 서비스면 그 비밀번호를, 아니면 메일 비밀번호를 넣습니다.',
+      '외부 메일 앱(IMAP) 사용이 막혀 있으면 연결되지 않습니다. 메일 관리자에게 허용을 요청하세요.',
+    ],
+    note: '',
+  },
+}
+
+/** Turns web addresses in a step into links. target=_blank: the exe window (pywebview) opens them in the default browser. */
+function linkify(text: string) {
+  return text.split(/((?:myaccount\.google\.com|mail\.naver\.com|nid\.naver\.com)[^\s)]*)/).map((part, i) =>
+    i % 2 ? (
+      <a key={i} href={`https://${part}`} target="_blank" rel="noreferrer" className="font-medium text-blue-700 underline hover:text-blue-900">
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  )
+}
+
+function PasswordHelp({ provider }: { provider: string }) {
+  const help = PASSWORD_STEPS[provider]
+  return (
+    <div className="rounded-lg bg-neutral-50 px-4 py-3.5 text-xs leading-relaxed text-neutral-600">
+      <p className="mb-1.5 font-bold text-neutral-800">{help.title}</p>
+      <ol className="flex list-decimal flex-col gap-1 pl-4">
+        {help.steps.map((s) => (
+          <li key={s}>{linkify(s)}</li>
+        ))}
+      </ol>
+      {help.note && <p className="mt-2 text-neutral-500">{help.note}</p>}
+      <p className="mt-2 text-neutral-500">입력한 비밀번호는 이 PC의 Windows 자격 증명 관리자에만 저장됩니다.</p>
+    </div>
+  )
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -211,9 +277,7 @@ function Accounts({ onClose, onChanged }: { onClose: () => void; onChanged: () =
               </div>
             )}
             <ErrorText error={error} />
-            <p className="text-xs leading-relaxed text-neutral-500">
-              Gmail: 2단계 인증 → 앱 비밀번호 · 네이버: 메일 환경설정에서 IMAP/SMTP 사용 → (2단계 인증 시) 애플리케이션 비밀번호. 비밀번호는 Windows 자격 증명 관리자에 저장됩니다.
-            </p>
+            <PasswordHelp provider={form.provider} />
           </div>
         )}
       </section>
