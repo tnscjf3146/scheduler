@@ -10,7 +10,7 @@ declare global {
 }
 
 export const CLI_LABEL: Record<Agent['cli'], string> = { claude: 'Claude Code', codex: 'Codex', shell: 'PowerShell' }
-const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
+export const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
 
 export function Agents({
   agents,
