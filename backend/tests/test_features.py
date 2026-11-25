@@ -342,6 +342,31 @@ def test_typing_waits_for_trust_question(monkeypatch):
     assert typed == ["hello"]
 
 
+def test_kill_strays_ends_only_that_agents_processes(tmp_path):
+    import subprocess
+    import sys
+    import time
+    import uuid
+
+    from app import sessions
+
+    mine, other = uuid.uuid4().hex, uuid.uuid4().hex
+    # Stand-ins for Claude Code's background helpers: they name the agent's folder in their command line.
+    stray = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(tmp_path / "agents" / mine / "workspace")])
+    keep = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(tmp_path / "agents" / other / "workspace")])
+    try:
+        sessions.kill_strays([mine])
+        for _ in range(20):
+            if stray.poll() is not None:
+                break
+            time.sleep(0.2)
+        assert stray.poll() is not None
+        assert keep.poll() is None
+    finally:
+        stray.kill()
+        keep.kill()
+
+
 def test_no_typing_into_a_bare_shell(monkeypatch):
     typed = []
     s = _bare_session(monkeypatch, typed)

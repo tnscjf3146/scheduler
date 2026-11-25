@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import os
 import re
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -156,8 +158,12 @@ class Session:
             self.pty.setwinsize(rows, cols)
 
     def kill(self) -> None:
-        if self.alive:
-            self.pty.terminate(force=True)
+        if self.alive:  # the whole tree: PowerShell, the CLI and whatever the CLI started under it
+            subprocess.run(["taskkill", "/PID", str(self.pty.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+            try:
+                self.pty.terminate(force=True)  # also closes the terminal itself
+            except OSError:
+                pass  # taskkill already ended the process
 
 
 _sessions: dict[str, Session] = {}
@@ -179,13 +185,41 @@ def status(agent_id: str) -> str:
     return "running" if session.alive else "exited"
 
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def kill_strays(agent_ids: list[str]) -> None:
+    """Ends processes whose command line names one of these agents (its folder or MCP config). Claude Code starts
+    background helpers (a daemon, forked sessions) outside the terminal's process tree; they keep the agent's folder
+    open, so it could not be deleted, and they outlive the app. An agent id is 32 random hex characters, so nothing
+    else matches."""
+    ids = [a for a in agent_ids if re.fullmatch(r"[0-9a-f]{32}", a)]
+    if not ids:
+        return
+    script = (
+        "$ids = $env:SCHEDULER_AGENT_IDS -split ','; Get-CimInstance Win32_Process | Where-Object { "
+        "$cl = $_.CommandLine; $cl -and ($ids | Where-Object { $cl.Contains($_) }) } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        env={**os.environ, "SCHEDULER_AGENT_IDS": ",".join(ids)},  # the ids are not in this command line
+        capture_output=True, timeout=60, creationflags=NO_WINDOW,
+    )
+
+
 def stop(agent_id: str) -> None:
     with _guard:
         session = _sessions.pop(agent_id, None)
     if session:
         session.kill()
+    kill_strays([agent_id])
 
 
 def stop_all() -> None:
-    for agent_id in list(_sessions):
-        stop(agent_id)
+    with _guard:
+        ids = list(_sessions)
+        live = [_sessions.pop(i) for i in ids]
+    for session in live:
+        session.kill()
+    kill_strays(ids)  # one sweep for all agents, so closing the app stays quick
