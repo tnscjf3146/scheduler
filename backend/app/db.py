@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS mails (
     sender TEXT NOT NULL,
     subject TEXT NOT NULL,
     received_at TEXT NOT NULL,
-    body TEXT NOT NULL,
+    body TEXT NOT NULL,                  -- plain text: what the summary reads
+    body_html TEXT,                      -- original HTML for display; '' = plain-text mail, NULL = not fetched yet
     summary_title TEXT,
     summary TEXT,
     reply_draft TEXT,
@@ -105,6 +106,8 @@ def init() -> None:
         for col, ddl in (("memo", "TEXT NOT NULL DEFAULT ''"), ("subtasks", "TEXT NOT NULL DEFAULT '[]'")):
             if col not in todo_cols:
                 conn.execute(f"ALTER TABLE todos ADD COLUMN {col} {ddl}")
+        if "body_html" not in {r["name"] for r in conn.execute("PRAGMA table_info(mails)")}:
+            conn.execute("ALTER TABLE mails ADD COLUMN body_html TEXT")
 
 
 def rows(cursor) -> list[dict]:

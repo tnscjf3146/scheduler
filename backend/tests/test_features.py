@@ -168,6 +168,47 @@ def test_parse_html_mail():
     assert mail["sender"] == "Kim <kim@a.com>"
     assert mail["body"].split() == ["Hello", "there"]
     assert mail["received_at"].startswith("2026-11-24T10:12:00")
+    assert "<b>there</b>" in mail["html"]
+
+
+def test_html_mail_keeps_inline_images():
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["Subject"] = "logo"
+    msg.set_content("plain version")
+    msg.add_alternative('<p>hi <img src="cid:logo123"></p>', subtype="html")
+    msg.get_payload()[1].add_related(b"\x89PNG-bytes", maintype="image", subtype="png", cid="<logo123>")
+
+    mail = parse_message(msg.as_bytes())
+    assert mail["body"] == "plain version"  # the summary still reads the plain text
+    assert '<img src="data:image/png;base64,' in mail["html"]
+    assert "cid:" not in mail["html"]
+
+    plain = EmailMessage()
+    plain.set_content("only text")
+    assert parse_message(plain.as_bytes())["html"] == ""
+
+
+def test_forward_message():
+    import pytest
+    from fastapi import HTTPException
+
+    from app.mail import Forward, build_forward
+
+    row = {"email": "me@naver.com", "sender": "Kim <kim@a.com>", "received_at": "2026-11-25T09:23:00",
+           "subject": "견적 문의", "body": "원문 내용", "body_html": "<p>원문 <b>HTML</b></p>"}
+    msg = build_forward(row, Forward(to="a@b.com, c@d.co.kr", note="확인 부탁드려요\n감사합니다"))
+    assert msg["To"] == "a@b.com, c@d.co.kr"
+    assert msg["Subject"] == "Fwd: 견적 문의"
+    text = msg.get_body(preferencelist=("plain",)).get_content()
+    assert text.startswith("확인 부탁드려요\n감사합니다") and "보낸 사람: Kim <kim@a.com>" in text and "원문 내용" in text
+    assert "<p>원문 <b>HTML</b></p>" in msg.get_body(preferencelist=("html",)).get_content()
+
+    custom = build_forward(row, Forward(to="a@b.com", subject="제목\r\nBcc: x@y.com"))
+    assert custom["Subject"] == "제목 Bcc: x@y.com"  # stays one header line
+    with pytest.raises(HTTPException):
+        build_forward(row, Forward(to="not-an-address"))
 
 
 def test_launch_continues_previous_conversation(tmp_path, monkeypatch):

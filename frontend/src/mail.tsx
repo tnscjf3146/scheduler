@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, formatWhen, type Mail, type MailAccount, type MailItem } from './api'
-import { Button, Empty, ErrorText, LinkButton, Modal, Section, Widget, inputClass } from './ui'
+import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
 
 const senderName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim() || s
 
@@ -46,39 +46,65 @@ function Tag({ children }: { children: string }) {
   return <span className="shrink-0 rounded border border-neutral-300 px-1 text-[10px] text-neutral-500">{children}</span>
 }
 
+type Mode = 'read' | 'reply' | 'forward'
+
+const prefixed = (prefix: string, subject: string) => (subject.toLowerCase().startsWith(prefix.toLowerCase()) ? subject : `${prefix} ${subject}`)
+
 function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; onSent: () => void }) {
   const [mail, setMail] = useState<Mail | null>(null)
-  const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<Mode>('read')
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
-    api<Mail>(`/api/mail/messages/${id}`).then((m) => {
-      setMail(m)
-      setDraft(m.reply_draft ?? '')
-    })
+    api<Mail>(`/api/mail/messages/${id}`).then(setMail)
   }, [id])
 
-  async function send() {
-    setSending(true)
-    setError(null)
-    try {
-      setMail(await api<Mail>(`/api/mail/messages/${id}/reply`, { method: 'POST', json: { body: draft } }))
-      onSent()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setSending(false)
-    }
-  }
-
   if (!mail) return null
+
+  if (mode === 'reply')
+    return (
+      <Compose
+        title="답장"
+        to={mail.sender}
+        initialSubject={prefixed('Re:', mail.subject)}
+        initialBody={mail.reply_draft ?? ''}
+        bodyPlaceholder="답장 내용"
+        hint="AI가 쓴 초안입니다. 고친 뒤 전송 버튼을 눌러야만 보내집니다."
+        onBack={() => setMode('read')}
+        onClose={onClose}
+        send={async ({ subject, body }) => {
+          setMail(await api<Mail>(`/api/mail/messages/${id}/reply`, { method: 'POST', json: { body, subject } }))
+          setNotice('답장을 보냈습니다.')
+          setMode('read')
+          onSent()
+        }}
+      />
+    )
+
+  if (mode === 'forward')
+    return (
+      <Compose
+        title="전달"
+        initialSubject={prefixed('Fwd:', mail.subject)}
+        initialBody=""
+        bodyPlaceholder="함께 보낼 말 (비워도 됩니다). 원문은 아래에 붙어서 갑니다."
+        hint="원문이 아래에 붙어서 전달됩니다. 전송 버튼을 눌러야만 보내집니다."
+        onBack={() => setMode('read')}
+        onClose={onClose}
+        send={async ({ to, subject, body }) => {
+          await api(`/api/mail/messages/${id}/forward`, { method: 'POST', json: { to, subject, note: body } })
+          setNotice(`${to}에게 전달했습니다.`)
+          setMode('read')
+        }}
+      />
+    )
+
   return (
     <Modal
       onClose={onClose}
       title={
         <>
-          <h2 className="text-[17px] font-bold">{mail.summary_title ?? mail.subject}</h2>
+          <h2 className="text-[17px] font-bold">{mail.subject}</h2>
           <p className="mt-1 text-xs text-neutral-500">
             {mail.sender} · {mail.account} · {formatWhen(mail.received_at)}
           </p>
@@ -86,31 +112,128 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
       }
       footer={
         <>
-          <p className="flex-1 text-[11px] text-neutral-500">
-            {mail.sent_at ? `${formatWhen(mail.sent_at)}에 답장을 보냈습니다.` : 'AI는 메일을 보내지 않습니다. 전송 버튼을 눌러야만 보내집니다.'}
-          </p>
-          <ErrorText error={error} />
+          <p className="flex-1 text-[11px] text-neutral-500">{notice || (mail.sent_at && `${formatWhen(mail.sent_at)}에 답장을 보냈습니다.`)}</p>
           <Button variant="secondary" onClick={onClose}>
             닫기
           </Button>
-          <Button onClick={send} disabled={sending || !draft.trim()}>
+          <Button variant="secondary" onClick={() => setMode('forward')}>
+            전달
+          </Button>
+          <Button onClick={() => setMode('reply')}>답장하기</Button>
+        </>
+      }
+    >
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <MailBody mail={mail} />
+        </div>
+        <aside className="sticky top-0 w-72 shrink-0 rounded-lg border border-neutral-200 bg-neutral-100 px-3.5 py-3">
+          <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-bold">
+            AI 요약 <span className="rounded border border-neutral-300 px-1 text-[10px] font-medium text-neutral-500">AI</span>
+          </h3>
+          <p className="text-[12px] leading-5 whitespace-pre-wrap text-neutral-700">
+            {mail.summary ?? (mail.status === 'pending' ? '요약하는 중입니다.' : '요약하지 못했습니다. 원문을 확인하세요.')}
+          </p>
+        </aside>
+      </div>
+    </Modal>
+  )
+}
+
+/** Writing screen for a reply (fixed recipient) or a forward (recipients typed in). */
+function Compose(props: {
+  title: string
+  to?: string
+  initialSubject: string
+  initialBody: string
+  bodyPlaceholder: string
+  hint: string
+  onBack: () => void
+  onClose: () => void
+  send: (v: { to: string; subject: string; body: string }) => Promise<void>
+}) {
+  const [to, setTo] = useState('')
+  const [subject, setSubject] = useState(props.initialSubject)
+  const [body, setBody] = useState(props.initialBody)
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const isForward = props.to === undefined
+
+  async function submit() {
+    setSending(true)
+    setError(null)
+    try {
+      await props.send({ to, subject, body })
+    } catch (err) {
+      setError((err as Error).message)
+      setSending(false)
+    }
+  }
+
+  const ready = subject.trim() && (isForward ? to.trim() : body.trim())
+  const row = 'flex items-center gap-3 text-xs font-medium text-neutral-500'
+  const input = `${inputClass} min-w-0 flex-1 py-2 text-[13px] text-neutral-900`
+  return (
+    <Modal
+      onClose={props.onClose}
+      title={<h2 className="text-[17px] font-bold">{props.title}</h2>}
+      footer={
+        <>
+          <p className="flex-1 text-[11px] text-neutral-500">{props.hint}</p>
+          <ErrorText error={error} />
+          <Button variant="secondary" onClick={props.onBack}>
+            원문 보기
+          </Button>
+          <Button onClick={submit} disabled={sending || !ready}>
             {sending ? '보내는 중' : '전송'}
           </Button>
         </>
       }
     >
-      <Section title="요약" tag="AI">
-        <div className="rounded-lg bg-neutral-100 px-3.5 py-3 text-[13px] whitespace-pre-wrap">
-          {mail.summary ?? (mail.status === 'pending' ? '요약하는 중입니다.' : '요약하지 못했습니다. 원문을 확인하세요.')}
-        </div>
-      </Section>
-      <Section title="원문">
-        <div className="scroll-hover max-h-40 rounded-lg border border-neutral-200 px-3.5 py-3 text-xs whitespace-pre-wrap text-neutral-600">{mail.body || '(본문 없음)'}</div>
-      </Section>
-      <Section title="답장 초안" tag="AI 작성 · 수정 가능">
-        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={7} className="rounded-lg border-[1.5px] border-neutral-800 px-3.5 py-3 text-[13px] outline-none" />
-      </Section>
+      <label className={row}>
+        <span className="w-14 shrink-0">받는 사람</span>
+        {isForward ? (
+          <input value={to} onChange={(e) => setTo(e.target.value)} autoFocus placeholder="메일 주소 (여러 명은 쉼표로 구분)" className={input} />
+        ) : (
+          <span className="text-[13px] text-neutral-900">{props.to}</span>
+        )}
+      </label>
+      <label className={row}>
+        <span className="w-14 shrink-0">제목</span>
+        <input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={300} className={input} />
+      </label>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        autoFocus={!isForward}
+        placeholder={props.bodyPlaceholder}
+        className="min-h-0 flex-1 resize-none rounded-lg border-[1.5px] border-neutral-800 px-3.5 py-3 text-[13px] leading-6 outline-none"
+      />
     </Modal>
+  )
+}
+
+/** The mail as its sender laid it out. HTML runs in a sandboxed frame: no scripts, links open outside the app. */
+function MailBody({ mail }: { mail: Mail }) {
+  if (!mail.body_html)
+    return <div className="text-[13px] leading-6 whitespace-pre-wrap text-neutral-800">{mail.body || '(본문 없음)'}</div>
+
+  function fit(frame: HTMLIFrameElement) {
+    const doc = frame.contentDocument
+    if (!doc) return
+    const resize = () => (frame.style.height = `${doc.documentElement.scrollHeight}px`)
+    resize()
+    new ResizeObserver(resize).observe(doc.body) // images load after the frame does
+  }
+
+  return (
+    <iframe
+      title="메일 원문"
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      srcDoc={`<base target="_blank"><style>body{margin:0}</style>${mail.body_html}`}
+      onLoad={(e) => fit(e.currentTarget)}
+      className="w-full shrink-0 border-0 bg-white"
+    />
   )
 }
 

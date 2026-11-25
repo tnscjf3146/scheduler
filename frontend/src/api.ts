@@ -30,7 +30,7 @@ export type MailItem = {
   sent_at: string | null
   account: string
 }
-export type Mail = MailItem & { body: string; summary: string | null; reply_draft: string | null }
+export type Mail = MailItem & { body: string; body_html: string | null; summary: string | null; reply_draft: string | null }
 export type MailAccount = { id: string; label: string; email: string; imap_host: string; watch: 'idle' | 'poll' | 'checking' }
 
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
