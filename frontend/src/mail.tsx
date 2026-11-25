@@ -123,17 +123,27 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
         </>
       }
     >
-      <div className="flex items-start gap-4">
-        <div className="min-w-0 flex-1">
+      {/* Fills the popup so the popup itself never scrolls: only the mail scrolls (and the summary, if very long). */}
+      <div className="flex min-h-0 flex-1 gap-5">
+        <div className="min-w-0 flex-[2] overflow-hidden rounded-lg border border-neutral-200">
           <MailBody mail={mail} />
         </div>
-        <aside className="sticky top-0 w-72 shrink-0 rounded-lg border border-neutral-200 bg-neutral-100 px-3.5 py-3">
-          <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-bold">
-            AI 요약 <span className="rounded border border-neutral-300 px-1 text-[10px] font-medium text-neutral-500">AI</span>
+        <aside className="scroll-hover flex min-w-0 flex-1 flex-col gap-3 rounded-lg border border-neutral-200 bg-neutral-100 px-5 py-4">
+          <h3 className="flex items-center gap-2 text-[15px] font-bold">
+            AI 요약 <span className="rounded border border-neutral-300 px-1.5 text-[11px] font-medium text-neutral-500">AI</span>
           </h3>
-          <p className="text-[12px] leading-5 whitespace-pre-wrap text-neutral-700">
-            {mail.summary ?? (mail.status === 'pending' ? '요약하는 중입니다.' : '요약하지 못했습니다. 원문을 확인하세요.')}
-          </p>
+          {mail.summary ? (
+            // One paragraph per "• " line, so a wrapped line does not read as a new item.
+            <div className="flex flex-col gap-3">
+              {mail.summary.split('\n').filter((l) => l.trim()).map((line, i) => (
+                <p key={i} className="text-[15px] leading-7 text-neutral-800">
+                  {line}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[15px] leading-7 text-neutral-500">{mail.status === 'pending' ? '요약하는 중입니다.' : '요약하지 못했습니다. 원문을 확인하세요.'}</p>
+          )}
         </aside>
       </div>
     </Modal>
@@ -216,26 +226,23 @@ function Compose(props: {
 /** The mail as its sender laid it out. HTML runs in a sandboxed frame: no scripts, links open outside the app. */
 function MailBody({ mail }: { mail: Mail }) {
   if (!mail.body_html)
-    return <div className="text-[13px] leading-6 whitespace-pre-wrap text-neutral-800">{mail.body || '(본문 없음)'}</div>
-
-  function fit(frame: HTMLIFrameElement) {
-    const doc = frame.contentDocument
-    if (!doc) return
-    const resize = () => (frame.style.height = `${doc.documentElement.scrollHeight}px`)
-    resize()
-    new ResizeObserver(resize).observe(doc.body) // images load after the frame does
-  }
+    return <div className="scroll-hover h-full px-5 py-4 text-[14px] leading-7 whitespace-pre-wrap text-neutral-800">{mail.body || '(본문 없음)'}</div>
 
   return (
     <iframe
       title="메일 원문"
       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-      srcDoc={`<base target="_blank"><style>body{margin:0}</style>${mail.body_html}`}
-      onLoad={(e) => fit(e.currentTarget)}
-      className="w-full shrink-0 border-0 bg-white"
+      srcDoc={`<base target="_blank"><style>${MAIL_FRAME_CSS}</style>${mail.body_html}`}
+      className="block h-full w-full border-0 bg-white"
     />
   )
 }
+
+/** Inside the mail frame: no outer margin, and the same thin scrollbar as the rest of the app. */
+const MAIL_FRAME_CSS =
+  'body{margin:0}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}' +
+  '::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{border-radius:3px;background:#d4d4d4}' +
+  '::-webkit-scrollbar-thumb:hover{background:#a3a3a3}'
 
 const PROVIDER_LABEL: Record<string, string> = { 'imap.gmail.com': 'Gmail', 'imap.naver.com': '네이버' }
 const WATCH_LABEL: Record<MailAccount['watch'], string> = { idle: '실시간', poll: '1분마다', checking: '확인 중' }
