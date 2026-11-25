@@ -90,9 +90,9 @@ def test_fire_keeps_folder_delete_removes_it(client, tmp_path):
     assert client.delete(f"/api/agents/{chosen['id']}?purge=true").status_code == 204
     assert client.get("/api/agents").json() == []
 
-    assert (tmp_path / "agents" / fired["id"] / "workspace" / "AGENTS.md").exists()
+    assert (tmp_path / "agents" / fired["id"] / "workspace").is_dir()
     assert not (tmp_path / "agents" / deleted["id"]).exists()
-    assert (custom / "AGENTS.md").exists()  # a folder the user chose is never deleted
+    assert custom.is_dir()  # a folder the user chose is never deleted
 
 
 def test_handover_hires_new_agent_into_same_folder(client, tmp_path):
@@ -108,8 +108,7 @@ def test_handover_hires_new_agent_into_same_folder(client, tmp_path):
     assert [a["name"] for a in client.get("/api/agents").json()] == ["후임"]  # the old one is fired
     assert new["cwd"] == old["cwd"]
     assert (workspace / "result.txt").read_text(encoding="utf-8") == "작업 결과"
-    md = (workspace / "AGENTS.md").read_text(encoding="utf-8")
-    assert "후임" in md and "꼼꼼하다" in md and "느긋하다" not in md
+    assert not (workspace / "AGENTS.md").exists()  # a Claude Code agent's folder gets nothing
 
     # First launch starts a new conversation even though the folder has the old one; later launches continue.
     (tmp_path / "agents" / new["id"]).mkdir(exist_ok=True)
@@ -119,6 +118,8 @@ def test_handover_hires_new_agent_into_same_folder(client, tmp_path):
         launch = lambda: sessions._launch_script(new, "http://x/mcp").read_text(encoding="utf-8-sig")
         assert "--continue" not in launch()
         assert "--continue" in launch()
+        identity = (tmp_path / "agents" / new["id"] / "plugin" / "identity.md").read_text(encoding="utf-8")
+        assert "후임" in identity and "꼼꼼하다" in identity and "느긋하다" not in identity
     finally:
         sessions._has_claude_history = saved
 
@@ -127,24 +128,20 @@ def test_handover_hires_new_agent_into_same_folder(client, tmp_path):
     assert not (tmp_path / "agents" / old["id"]).exists()
 
 
-def test_agent_gets_own_workspace(client, tmp_path):
-    a = client.post("/api/agents", json={"name": "a", "cli": "shell", "persona": "말이 짧고 꼼꼼하다"}).json()
-    b = client.post("/api/agents", json={"name": "b", "cli": "shell"}).json()
+def test_agent_gets_own_workspace_and_codex_gets_agents_md(client, tmp_path):
+    a = client.post("/api/agents", json={"name": "a", "cli": "codex", "persona": "말이 짧고 꼼꼼하다"}).json()
+    b = client.post("/api/agents", json={"name": "b", "cli": "claude"}).json()
     assert a["cwd"] != b["cwd"]
     assert a["cwd"] == str(tmp_path / "agents" / a["id"] / "workspace")
-    workspace = tmp_path / "agents" / a["id"] / "workspace"
-    assert "submit_approval" in (workspace / "AGENTS.md").read_text(encoding="utf-8")
-    assert "말이 짧고 꼼꼼하다" in (workspace / "AGENTS.md").read_text(encoding="utf-8")
-    for shim in ("CLAUDE.md", "GEMINI.md"):
-        assert (workspace / shim).read_text(encoding="utf-8") == "@AGENTS.md\n"
+    md = (tmp_path / "agents" / a["id"] / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "말이 짧고 꼼꼼하다" in md and "submit_approval" in md and "할 일 · 달력 규칙" in md  # the rules written out
+    assert list((tmp_path / "agents" / b["id"] / "workspace").iterdir()) == []  # Claude Code: nothing in the folder
 
     custom = tmp_path / "mine"
     custom.mkdir()
     (custom / "AGENTS.md").write_text("내 프로젝트 규칙", encoding="utf-8")
-    client.post("/api/agents", json={"name": "c", "cli": "shell", "cwd": str(custom)})
+    client.post("/api/agents", json={"name": "c", "cli": "codex", "cwd": str(custom)})
     assert (custom / "AGENTS.md").read_text(encoding="utf-8") == "내 프로젝트 규칙"  # never overwritten
-    assert (custom / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
-    assert (custom / "GEMINI.md").exists()
 
 
 def test_terminal_session_echoes(client, tmp_path):
@@ -456,13 +453,16 @@ def test_skills_and_harness_reach_the_agent_as_a_plugin(client, tmp_path, monkey
     assert f"--plugin-dir '{plugin}'" in script
     assert "짧게 쓴다." in (plugin / "skills" / "writing" / "SKILL.md").read_text(encoding="utf-8")
     hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    assert hooks == {"PreToolUse": [{"hooks": [{"type": "command", "command": "pytest -q"}], "matcher": "Bash"}]}
+    assert hooks["PreToolUse"] == [{"hooks": [{"type": "command", "command": "pytest -q"}], "matcher": "Bash"}]
+    assert "identity.md" in hooks["SessionStart"][0]["hooks"][0]["command"]  # who the agent is
+    assert "비서" in (plugin / "identity.md").read_text(encoding="utf-8")
 
     # deleting it detaches it; the next launch drops the plugin
     client.delete(f"/api/extensions/{skill['id']}")
     client.delete(f"/api/extensions/{hook['id']}")
-    assert extensions.build_plugin({**agent, "extensions": json.dumps([skill["id"], hook["id"]])}) is None
-    assert not plugin.exists()
+    extensions.build_plugin({**agent, "extensions": json.dumps([skill["id"], hook["id"]])})
+    assert not (plugin / "skills").exists()
+    assert list(json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]) == ["SessionStart"]
 
 
 def test_skill_rules_live_in_a_skill_not_in_code(client, tmp_path):
@@ -486,14 +486,34 @@ def test_skill_rules_live_in_a_skill_not_in_code(client, tmp_path):
     assert json.loads(res["content"][0]["text"])["name"] == "react-rules"
 
 
-def test_launch_restores_missing_agents_md_without_touching_existing(client, tmp_path):
+def test_launch_restores_missing_agents_md_for_codex_only(client, tmp_path):
     from app import db, sessions
 
-    a = client.post("/api/agents", json={"name": "옛 에이전트", "role": "정리", "cli": "claude", "cwd": str(tmp_path)}).json()
-    (tmp_path / "AGENTS.md").unlink()  # like an agent made before AGENTS.md existed
-    (tmp_path / "CLAUDE.md").write_text("내가 고친 내용\n", encoding="utf-8")
-    with db.connect() as conn:
-        agent = dict(conn.execute("SELECT * FROM agents WHERE id = ?", (a["id"],)).fetchone())
-    sessions._launch_script(agent, "http://x/mcp")
-    assert "옛 에이전트" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
-    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == "내가 고친 내용\n"
+    work = {cli: tmp_path / cli for cli in ("codex", "claude")}
+    agents = {}
+    for cli, folder in work.items():
+        folder.mkdir()
+        made = client.post("/api/agents", json={"name": f"옛 {cli}", "cli": cli, "cwd": str(folder)}).json()
+        with db.connect() as conn:
+            agents[cli] = dict(conn.execute("SELECT * FROM agents WHERE id = ?", (made["id"],)).fetchone())
+    (work["codex"] / "AGENTS.md").unlink()  # like an agent made before AGENTS.md existed
+    for agent in agents.values():
+        sessions._launch_script(agent, "http://x/mcp")
+    assert "옛 codex" in (work["codex"] / "AGENTS.md").read_text(encoding="utf-8")
+    assert list(work["claude"].iterdir()) == []
+
+
+def test_new_agents_get_the_default_skills(client, tmp_path):
+    import json
+
+    builtin = {x["name"]: x["id"] for x in client.get("/api/extensions").json() if x["builtin"]}
+    assert set(builtin) == {"approval-rules", "todo-rules", "agent-tools-rules", "skill-writing-rules"}
+
+    plain = client.post("/api/agents", json={"name": "기본", "cli": "claude"}).json()
+    picked = client.post("/api/agents", json={"name": "직접 고름", "cli": "claude", "extensions": []}).json()
+    on = lambda agent_id: [n for n, i in builtin.items() if agent_id in next(x for x in client.get("/api/extensions").json() if x["id"] == i)["agent_ids"]]
+    assert sorted(on(plain["id"])) == sorted(builtin) and on(picked["id"]) == []
+
+    # an agent made through MCP gets the defaults too, and nothing else
+    res = rpc(client, plain["id"], "tools/call", {"name": "create_agent", "arguments": {"name": "부하", "cli": "claude"}})["result"]
+    assert sorted(on(json.loads(res["content"][0]["text"])["id"])) == sorted(builtin)

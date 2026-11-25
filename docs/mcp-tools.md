@@ -8,8 +8,8 @@ Scheduler 앱의 에이전트 터미널에서 실행되는 AI(Claude Code, Codex
 - 주소: `http://127.0.0.1:<앱 포트>/mcp/<에이전트 id>`. 앱이 켜질 때마다 포트가 바뀌어서, 에이전트를 시작할 때마다 주소를 새로 넘긴다.
 - Claude Code는 `--mcp-config <에이전트 폴더>/mcp.json`으로, Codex는 `-c mcp_servers.scheduler.url=...`로 붙는다(`sessions._launch_script`).
 - 주소에 에이전트 id가 들어 있어서, 어느 에이전트가 불렀는지 앱이 안다. 결재·보고 문서의 기안자와 `get_approval`의 조회 범위가 이 id로 정해진다.
-- 각 도구를 언제 쓰는지는 작업 폴더의 `AGENTS.md`에 적혀 있다(`agents.py`). Claude Code는 이 파일을 불러오는 `CLAUDE.md`를 읽는다.
-- `AGENTS.md`는 처음 만들 때만 쓴다(인수인계 때는 새로 쓴다). 그 전에 만든 에이전트의 안내문에는 양식 관련 내용(`list_forms`, `form`, `fields`)이 없다. 도구 목록은 MCP에서 바로 받아 오므로 도구 자체는 쓸 수 있다.
+- 각 도구를 언제 어떻게 쓰는지는 앱의 기본 스킬에 있다. 결재·보고는 `approval-rules`, 할 일은 `todo-rules`, 스킬·하네스·에이전트는 `agent-tools-rules`와 `skill-writing-rules`다(`defaults.py`).
+- Claude Code 에이전트는 이 스킬들을 플러그인으로 받는다. Codex 에이전트는 같은 내용을 작업 폴더의 `AGENTS.md` 하나로 받는다. 자세한 구조는 [`skills-harness.md`](./skills-harness.md) 6장에 있다.
 
 ## 도구 한눈에 보기
 
@@ -167,10 +167,10 @@ Scheduler 앱의 에이전트 터미널에서 실행되는 AI(Claude Code, Codex
 | `name` | 예 | 50자 이내 |
 | `cli` | 예 | `claude` 또는 `codex` |
 | `role` | | 100자 이내 |
-| `persona` | | 성격과 일하는 방식. 새 에이전트의 `AGENTS.md`에 들어간다 |
+| `persona` | | 성격과 일하는 방식. 새 에이전트의 정체성에 들어간다 |
 | `cwd` | | 이미 있는 폴더. 생략하면 전용 폴더를 만든다 |
 
-사용자가 만들라고 한 경우에만 쓴다. 스킬과 하네스는 붙일 수 없다.
+사용자가 만들라고 한 경우에만 쓴다. 새 에이전트에는 앱의 기본 스킬만 붙는다. 다른 스킬과 하네스는 붙일 수 없다.
 
 ## 에이전트가 할 수 없는 것
 

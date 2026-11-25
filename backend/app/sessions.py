@@ -43,16 +43,16 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
     is_fresh = fresh.exists()
     fresh.unlink(missing_ok=True)
 
-    # Agents made before AGENTS.md existed (or whose file was deleted) get it now; existing files are left alone.
-    from .agents import _write_instructions  # agents imports this module, so import here
+    if agent["cli"] == "codex":  # Codex reads only AGENTS.md; written if missing, an existing one is left alone
+        from .agents import write_agents_md  # agents imports this module, so import here
 
-    _write_instructions(Path(agent["cwd"]), agent["name"], agent.get("role") or "", "")
+        write_agents_md(agent)
 
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
-        # The skills and harness attached to this agent, as a plugin (see extensions.py).
+        # Identity, skills and harness, as a plugin (see extensions.py). Nothing goes into the work folder.
         plugin = extensions.build_plugin(agent)
-        args = f"--mcp-config {_ps_quote(str(mcp_json))}" + (f" --plugin-dir {_ps_quote(str(plugin))}" if plugin else "")
+        args = f"--mcp-config {_ps_quote(str(mcp_json))} --plugin-dir {_ps_quote(str(plugin))}"
         start = f"claude {args}"
         if not is_fresh and _has_claude_history(agent["cwd"]):
             # A saved file is no promise --continue accepts it (e.g. a conversation Claude Code ran as a background

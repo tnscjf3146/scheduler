@@ -15,7 +15,7 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from . import db
+from . import db, defaults
 
 router = APIRouter(prefix="/api/extensions", tags=["extensions"])
 
@@ -188,27 +188,29 @@ def _skill_name(ext: dict) -> str:
     return slug or f"skill-{ext['id'][:8]}"
 
 
-def build_plugin(agent: dict) -> Path | None:
-    """Writes the agent's skills and hooks as a Claude Code plugin; None when it has none."""
+def build_plugin(agent: dict) -> Path:
+    """Writes the Claude Code plugin the agent starts with: its identity, given by a SessionStart hook (what a
+    SessionStart hook prints goes into the conversation), plus the skills and hooks attached to it."""
     folder = db.data_dir() / "agents" / agent["id"] / "plugin"
     shutil.rmtree(folder, ignore_errors=True)  # rebuilt from scratch so removed ones disappear
     ids = json.loads(agent.get("extensions") or "[]")
-    if not ids:
-        return None
     with db.connect() as conn:
         marks = ",".join("?" * len(ids))
-        exts = db.rows(conn.execute(f"SELECT * FROM extensions WHERE id IN ({marks}) ORDER BY created_at", ids))
-    if not exts:
-        return None
+        exts = db.rows(conn.execute(f"SELECT * FROM extensions WHERE id IN ({marks}) ORDER BY created_at", ids)) if ids else []
 
     (folder / ".claude-plugin").mkdir(parents=True)
     (folder / ".claude-plugin" / "plugin.json").write_text(json.dumps({
         "name": "scheduler-agent",
         "version": "0.1.0",
-        "description": f"Scheduler에서 '{agent['name']}'에게 붙인 스킬과 하네스",
+        "description": f"Scheduler 에이전트 '{agent['name']}'의 정체성, 스킬, 하네스",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
+    identity = folder / "identity.md"
+    identity.write_text(defaults.identity(agent), encoding="utf-8")
+    # PowerShell is on every Windows machine; UTF-8 output keeps the Korean text intact.
+    show = (f"powershell -NoProfile -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+            f"Get-Content -Raw -Encoding UTF8 -LiteralPath '{identity}'\"")
 
-    hooks: dict[str, list] = {}
+    hooks: dict[str, list] = {"SessionStart": [{"hooks": [{"type": "command", "command": show}]}]}
     used: set[str] = set()
     for ext in exts:
         if ext["kind"] == "skill":
@@ -226,7 +228,12 @@ def build_plugin(agent: dict) -> Path | None:
             if ext["matcher"]:
                 entry["matcher"] = ext["matcher"]
             hooks.setdefault(ext["event"], []).append(entry)
-    if hooks:
-        (folder / "hooks").mkdir()
-        (folder / "hooks" / "hooks.json").write_text(json.dumps({"hooks": hooks}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (folder / "hooks").mkdir()
+    (folder / "hooks" / "hooks.json").write_text(json.dumps({"hooks": hooks}, ensure_ascii=False, indent=2), encoding="utf-8")
     return folder
+
+
+def builtin_ids() -> list[str]:
+    """The app's default skills, attached to a new agent unless the user picks otherwise."""
+    with db.connect() as conn:
+        return [r["id"] for r in conn.execute("SELECT id FROM extensions WHERE builtin = 1 ORDER BY created_at")]

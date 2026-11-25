@@ -20,7 +20,7 @@ const eventLabel = (e: string) => EVENTS[e] ?? e
 /** Skills and harness reach an agent as a Claude Code plugin; Codex has no such mechanism. */
 export const takesExtensions = (a: Agent) => a.cli === 'claude'
 
-type Draft = Omit<Extension, 'id' | 'created_by' | 'created_at' | 'agent_ids'>
+type Draft = Omit<Extension, 'id' | 'created_by' | 'created_at' | 'agent_ids' | 'builtin'>
 const blank = (kind: Extension['kind']): Draft => ({ kind, name: '', description: '', body: '', event: 'PreToolUse', matcher: '', command: '' })
 const draftOf = ({ kind, name, description, body, event, matcher, command }: Draft): Draft => ({ kind, name, description, body, event, matcher, command })
 
@@ -41,6 +41,7 @@ export function ExtensionList({ agents, items, reload, editing, setEditing }: {
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5">
               <span className="truncate text-[13px] font-medium">{x.name}</span>
+              {!!x.builtin && <span className="shrink-0 rounded bg-neutral-200 px-1 text-[10px] text-neutral-600">기본</span>}
               {x.created_by && <span className="shrink-0 rounded bg-amber-100 px-1 text-[10px] text-amber-800">{x.created_by}이(가) 만듦 · 검토 필요</span>}
             </span>
             <span className="block truncate text-[11px] text-neutral-500">
@@ -272,13 +273,14 @@ function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported
   )
 }
 
-/** Checkboxes in the add-agent form. */
-export function ExtensionPicker({ value, onChange, cli }: { value: string[]; onChange: (ids: string[]) => void; cli: Agent['cli'] }) {
+/** Checkboxes in the add-agent form. Untouched (null), the app's default skills are checked. */
+export function ExtensionPicker({ value, onChange, cli }: { value: string[] | null; onChange: (ids: string[]) => void; cli: Agent['cli'] }) {
   const [items, setItems] = useState<Extension[]>([])
   useEffect(() => {
     api<Extension[]>('/api/extensions').then(setItems, () => {})
   }, [])
   if (items.length === 0) return null
+  const checked = value ?? items.filter((x) => x.builtin).map((x) => x.id)
   const on = cli === 'claude'
   return (
     <div className="flex flex-col gap-1 text-xs font-medium">
@@ -286,7 +288,7 @@ export function ExtensionPicker({ value, onChange, cli }: { value: string[]; onC
       <div className={`flex flex-wrap gap-1.5 ${on ? '' : 'opacity-40'}`}>
         {items.map((x) => (
           <label key={x.id} className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 font-normal">
-            <input type="checkbox" disabled={!on} checked={value.includes(x.id)} onChange={(e) => onChange(e.target.checked ? [...value, x.id] : value.filter((i) => i !== x.id))} />
+            <input type="checkbox" disabled={!on} checked={checked.includes(x.id)} onChange={(e) => onChange(e.target.checked ? [...checked, x.id] : checked.filter((i) => i !== x.id))} />
             <span className="text-[10px] text-neutral-500">{KIND_LABEL[x.kind]}</span>
             {x.name}
           </label>

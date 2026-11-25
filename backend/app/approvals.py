@@ -279,7 +279,7 @@ TOOLS = [
         "name": "create_agent",
         "description": (
             "새 에이전트를 만든다. 대시보드 Agent 목록에 추가되고, 사용자가 누르면 터미널이 열린다. "
-            "사용자가 만들라고 한 경우에만 쓴다. 스킬과 하네스는 붙일 수 없다(사용자가 화면에서 붙인다)."
+            "사용자가 만들라고 한 경우에만 쓴다. 앱의 기본 스킬만 붙는다. 다른 스킬과 하네스는 사용자가 화면에서 붙인다."
         ),
         "inputSchema": {
             "type": "object",
@@ -334,7 +334,8 @@ def _agent_tool(caller: dict, name: str, args: dict):
     if name == "create_agent":
         if args.get("cli") not in ("claude", "codex"):
             raise HTTPException(400, "cli는 claude 또는 codex입니다")
-        return agents.create(agents.AgentIn(**{**args, "extensions": []}))
+        # Only the app's default skills: an agent may not attach anything else (hooks run without the CLI asking).
+        return agents.create(agents.AgentIn(**{**args, "extensions": None}))
     return None
 
 

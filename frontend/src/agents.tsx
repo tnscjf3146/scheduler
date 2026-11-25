@@ -211,7 +211,7 @@ export function Agents({
 
 function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => void; onAdded: (a: Agent) => void }) {
   const [form, setForm] = useState({ name: '', role: '', persona: '', cli: from?.cli ?? ('claude' as Agent['cli']), cwd: '' })
-  const [extIds, setExtIds] = useState<string[]>([])
+  const [extIds, setExtIds] = useState<string[] | null>(null) // null: not touched yet, the app's defaults
   const [error, setError] = useState<string | null>(null)
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [k]: e.target.value })
@@ -224,7 +224,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
   async function submit() {
     try {
       const url = from ? `/api/agents/${from.id}/handover` : '/api/agents'
-      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null, extensions: form.cli === 'claude' ? extIds : [] } }))
+      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null, extensions: form.cli === 'claude' ? (extIds ?? undefined) : [] } }))
     } catch (err) {
       setError((err as Error).message)
     }
@@ -263,7 +263,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
           onChange={set('persona')}
           placeholder={'예: 말이 짧고 결론부터 말한다. 확실하지 않으면 추측하지 않고 묻는다.'}
         />
-        <span className="text-[11px] font-normal text-neutral-500">작업 폴더의 AGENTS.md에 들어갑니다. 나중엔 그 파일을 직접 고치면 됩니다.</span>
+        <span className="text-[11px] font-normal text-neutral-500">에이전트가 시작할 때 정체성(이름·역할·성격)으로 들어갑니다. 작업 폴더에는 파일을 만들지 않습니다(Codex는 AGENTS.md를 만듭니다).</span>
       </label>
       <label className="flex flex-col gap-1 text-xs font-medium">
         CLI
@@ -275,7 +275,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
       </label>
       {from ? (
         <p className="rounded-md bg-neutral-100 px-3 py-2 text-[11px] text-neutral-600">
-          '{from.name}'은(는) 해고되고, 새 에이전트가 같은 작업 폴더에서 새 대화로 시작합니다. 폴더의 파일은 그대로이고 AGENTS.md만 새로 씁니다.
+          '{from.name}'은(는) 해고되고, 새 에이전트가 같은 작업 폴더에서 새 대화로 시작합니다. 폴더의 파일은 그대로입니다(Codex는 AGENTS.md만 새로 씁니다).
           <br />
           <span className="break-all text-neutral-500">{from.cwd}</span>
         </p>

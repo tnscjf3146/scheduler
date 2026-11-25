@@ -34,6 +34,7 @@ export type Extension = {
   command: string
   created_by: string | null
   created_at: string
+  builtin: number
   agent_ids: string[]
 }
 export type DocForm = {

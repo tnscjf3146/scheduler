@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS agents (
     cli TEXT NOT NULL,                   -- 'claude' | 'codex' | 'shell'
     cwd TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    extensions TEXT NOT NULL DEFAULT '[]'   -- ids of attached skills and harness (extensions table)
+    extensions TEXT NOT NULL DEFAULT '[]',  -- ids of attached skills and harness (extensions table)
+    persona TEXT NOT NULL DEFAULT ''        -- part of the identity the agent is started with
 );
 
 -- Skills and harness (Claude Code hooks) the user keeps in the app and attaches to agents.
@@ -64,7 +65,8 @@ CREATE TABLE IF NOT EXISTS extensions (
     matcher TEXT NOT NULL DEFAULT '',    -- hook: which tools, for tool events
     command TEXT NOT NULL DEFAULT '',    -- hook: command to run
     created_by TEXT,                     -- agent name when an agent made it through MCP, until the user saves it
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    builtin INTEGER NOT NULL DEFAULT 0   -- one of the app's default skills: attached to new agents by default
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -145,15 +147,12 @@ def init() -> None:
             if col not in approval_cols:
                 conn.execute(f"ALTER TABLE approvals ADD COLUMN {col} {ddl}")
         agent_cols = {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}
-        if "extensions" not in agent_cols:
-            conn.execute("ALTER TABLE agents ADD COLUMN extensions TEXT NOT NULL DEFAULT '[]'")
-        if not conn.execute("SELECT 1 FROM meta WHERE key = 'seeded_skill_rules'").fetchone():
-            # The rule agents follow when they make skills. A skill, not code: the user edits it in the app.
-            conn.execute(
-                "INSERT INTO extensions (id, kind, name, description, body, created_at) VALUES (?, 'skill', ?, ?, ?, ?)",
-                (new_id(), "skill-writing-rules", SKILL_RULES_DESCRIPTION, SKILL_RULES_BODY, now()),
-            )
-            conn.execute("INSERT INTO meta (key, value) VALUES ('seeded_skill_rules', '1')")
+        for col, ddl in (("extensions", "TEXT NOT NULL DEFAULT '[]'"), ("persona", "TEXT NOT NULL DEFAULT ''")):
+            if col not in agent_cols:
+                conn.execute(f"ALTER TABLE agents ADD COLUMN {col} {ddl}")
+        if "builtin" not in {r["name"] for r in conn.execute("PRAGMA table_info(extensions)")}:
+            conn.execute("ALTER TABLE extensions ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0")
+        _seed_default_skills(conn)
         if not conn.execute("SELECT 1 FROM forms").fetchone():  # starter forms; the user can change or delete them
             for name, kind, labels in DEFAULT_FORMS:
                 fields = [{"label": l, "long": True} for l in labels]
@@ -161,36 +160,35 @@ def init() -> None:
                              (new_id(), name, kind, json.dumps(fields, ensure_ascii=False), now()))
 
 
-SKILL_RULES_DESCRIPTION = "스킬을 만들거나 고칠 때. create_skill 도구를 쓰기 전에 읽는다"
-SKILL_RULES_BODY = """# 스킬 작성 규칙
+def _seed_default_skills(conn) -> None:
+    """Puts each of the app's default skills in once and attaches it to the Claude Code agents there are.
+    A skill the user deleted stays deleted (remembered in meta)."""
+    from .defaults import DEFAULT_SKILLS
 
-## 이름
+    for name, description, body in DEFAULT_SKILLS:
+        key = f"seeded_skill:{name}"
+        if conn.execute("SELECT 1 FROM meta WHERE key = ?", (key,)).fetchone():
+            continue
+        row = conn.execute("SELECT id FROM extensions WHERE kind = 'skill' AND name = ?", (name,)).fetchone()
+        old = name == "skill-writing-rules" and conn.execute("SELECT 1 FROM meta WHERE key = 'seeded_skill_rules'").fetchone()
+        if row:
+            ext_id = row["id"]
+            conn.execute("UPDATE extensions SET builtin = 1 WHERE id = ?", (ext_id,))
+        elif old:  # put in by an earlier version and deleted by the user since
+            ext_id = None
+        else:
+            ext_id = new_id()
+            conn.execute(
+                "INSERT INTO extensions (id, kind, name, description, body, created_at, builtin) VALUES (?, 'skill', ?, ?, ?, ?, 1)",
+                (ext_id, name, description, body, now()),
+            )
+        if ext_id:
+            for a in conn.execute("SELECT id, extensions FROM agents WHERE cli = 'claude'").fetchall():
+                ids = json.loads(a["extensions"])
+                if ext_id not in ids:
+                    conn.execute("UPDATE agents SET extensions = ? WHERE id = ?", (json.dumps(ids + [ext_id]), a["id"]))
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, '1')", (key,))
 
-- 영어 소문자, 숫자, 하이픈(-)으로 쓴다. 예: `doc-writing-rules`
-- 이유: Claude Code는 스킬 이름에 이 글자만 받는다. 다른 글자가 있으면 앱이 이름을 `skill-<번호>`로 바꾼다.
-
-## 설명과 내용의 언어
-
-- 한국어로 쓴다.
-- 영어 단어는 그대로 둔다. 기술 용어, 제품 이름, 명령, 코드, 경로, 식별자가 여기에 해당한다.
-- 영어로만 이루어진 문장은 한국어로 바꾼다.
-
-| 원문 | 처리 |
-| --- | --- |
-| Use this skill when writing docs. | "문서를 쓸 때 이 스킬을 쓴다."로 바꾼다 |
-| React 컴포넌트를 만들 때 | 그대로 둔다 |
-| `git commit` 전에 테스트를 돌린다. | 그대로 둔다 |
-
-## 설명(언제 쓰는지) 쓰는 법
-
-- 이 스킬을 언제 쓰는지 쓴다. Claude는 본문을 읽기 전에 설명만 보고 스킬을 고른다.
-- 사용자가 할 법한 말을 넣는다. 예: "보고서 써 줘", "문서 다듬어 줘"
-
-## 내용 쓰는 법
-
-- 지시를 먼저 쓰고, 이유는 다음 문장에 쓴다.
-- 절차는 번호 목록으로 쓴다. 항목 하나에는 동작 하나만 둔다.
-"""
 
 DEFAULT_FORMS = [
     ("결재서", "approval", ["배경", "결정 사항"]),
