@@ -45,8 +45,14 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
 
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
-        cont = " --continue" if not is_fresh and _has_claude_history(agent["cwd"]) else ""
-        lines.append(f"claude{cont} --mcp-config {_ps_quote(str(mcp_json))}")
+        start = f"claude --mcp-config {_ps_quote(str(mcp_json))}"
+        if not is_fresh and _has_claude_history(agent["cwd"]):
+            # A saved file is no promise --continue accepts it (e.g. a conversation Claude Code ran as a background
+            # session): it then prints "No conversation found to continue" and exits, so start a new one instead.
+            lines.append(f"claude --continue --mcp-config {_ps_quote(str(mcp_json))}")
+            lines.append(f"if ($LASTEXITCODE) {{ {start} }}")
+        else:
+            lines.append(start)
     elif agent["cli"] == "codex":
         # Codex has no cheap "is there a session here?" check, so remember that it was started once.
         started = folder / "codex-started"
