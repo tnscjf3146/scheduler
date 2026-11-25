@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 import time
 from pathlib import Path
@@ -140,6 +141,16 @@ def restart(agent_id: str) -> dict:
         agent = _get(conn, agent_id)
     sessions.stop(agent_id)
     return {**agent, "status": "stopped"}
+
+
+@router.post("/{agent_id}/open-folder", status_code=204)
+def open_folder(agent_id: str) -> None:
+    """Shows the agent's working folder in File Explorer."""
+    with db.connect() as conn:
+        cwd = _get(conn, agent_id)["cwd"]
+    if not Path(cwd).is_dir():
+        raise HTTPException(404, f"작업 폴더가 없습니다: {cwd}")
+    os.startfile(cwd)
 
 
 @router.delete("/{agent_id}", status_code=204)

@@ -120,6 +120,16 @@ export function Agents({
               </button>
               <button
                 className="px-3 py-1.5 text-left hover:bg-neutral-100"
+                title={a.cwd}
+                onClick={() => {
+                  setMenu(null)
+                  api(`/api/agents/${a.id}/open-folder`, { method: 'POST' }).catch((err) => window.alert((err as Error).message))
+                }}
+              >
+                폴더 열기
+              </button>
+              <button
+                className="px-3 py-1.5 text-left hover:bg-neutral-100"
                 onClick={() => {
                   setMenu(null)
                   setAdding({ from: a })
