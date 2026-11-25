@@ -23,6 +23,19 @@ export type Approval = {
   form_name: string
   fields: { label: string; value: string; long: boolean }[]
 }
+export type Extension = {
+  id: string
+  kind: 'skill' | 'hook'
+  name: string
+  description: string
+  body: string
+  event: string
+  matcher: string
+  command: string
+  created_by: string | null
+  created_at: string
+  agent_ids: string[]
+}
 export type DocForm = {
   id: string
   name: string

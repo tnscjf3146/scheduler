@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from . import db, sessions, todos
+from . import agents, db, extensions, sessions, todos
 
 router = APIRouter(tags=["approvals"])
 
@@ -230,6 +230,68 @@ TOOLS = [
         "description": "할 일을 지운다. 되돌릴 수 없으니 사용자가 지우라고 한 것만 지운다.",
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
     },
+    {
+        "name": "list_extensions",
+        "description": "사용자가 앱에 둔 스킬과 하네스(Claude Code 훅) 목록과, 각각이 붙은 에이전트 id(agent_ids)를 본다.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "create_skill",
+        "description": (
+            "스킬을 만들어 앱의 '스킬 & 하네스' 목록에 넣는다. 스킬은 Claude Code가 필요할 때 읽는 지시 묶음(SKILL.md)이다. "
+            "에이전트에 붙이는 것은 사용자가 화면에서 한다."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "이름 (40자 이내)"},
+                "description": {"type": "string", "description": "언제 쓰는지. Claude가 이 설명을 보고 스킬을 고른다"},
+                "body": {"type": "string", "description": "스킬 내용 (마크다운). 따라야 할 규칙과 절차"},
+            },
+            "required": ["name", "description", "body"],
+        },
+    },
+    {
+        "name": "create_hook",
+        "description": (
+            "하네스(Claude Code 훅)를 만들어 앱의 '스킬 & 하네스' 목록에 넣는다. 훅은 정해진 시점에 명령을 자동으로 실행한다. "
+            "에이전트에 붙이는 것은 사용자가 화면에서 검토한 뒤에 한다."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "이름 (40자 이내)"},
+                "event": {"type": "string", "enum": list(extensions.EVENTS), "description": "실행 시점"},
+                "matcher": {"type": "string", "description": "PreToolUse/PostToolUse만: 대상 도구. 예: Bash, Edit|Write"},
+                "command": {"type": "string", "description": "실행할 명령"},
+                "description": {"type": "string", "description": "사용자에게 보일 설명: 무엇을 왜 하는지"},
+            },
+            "required": ["name", "event", "command"],
+        },
+    },
+    {
+        "name": "list_agents",
+        "description": "Scheduler 앱의 에이전트 목록(id, 이름, 역할, CLI, 작업 폴더, 상태)을 본다.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "create_agent",
+        "description": (
+            "새 에이전트를 만든다. 대시보드 Agent 목록에 추가되고, 사용자가 누르면 터미널이 열린다. "
+            "사용자가 만들라고 한 경우에만 쓴다. 스킬과 하네스는 붙일 수 없다(사용자가 화면에서 붙인다)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "이름 (50자 이내)"},
+                "role": {"type": "string", "description": "역할 (100자 이내)"},
+                "persona": {"type": "string", "description": "성격과 일하는 방식. AGENTS.md에 들어간다"},
+                "cli": {"type": "string", "enum": ["claude", "codex"]},
+                "cwd": {"type": "string", "description": "작업 폴더 (이미 있는 폴더). 생략하면 전용 폴더를 만든다"},
+            },
+            "required": ["name", "cli"],
+        },
+    },
 ]
 
 
@@ -258,8 +320,27 @@ def _text(obj) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False)}]}
 
 
+def _agent_tool(caller: dict, name: str, args: dict):
+    """Skills, harness and agents. Attaching skills or harness to an agent is left to the user on purpose."""
+    if name == "list_extensions":
+        return extensions.list_extensions()
+    if name == "create_skill":
+        return extensions.save(extensions.ExtensionIn(kind="skill", **args), created_by=caller["name"])
+    if name == "create_hook":
+        return extensions.save(extensions.ExtensionIn(kind="hook", **args), created_by=caller["name"])
+    if name == "list_agents":
+        return [{k: a[k] for k in ("id", "name", "role", "cli", "cwd", "status")} for a in agents.list_agents()]
+    if name == "create_agent":
+        if args.get("cli") not in ("claude", "codex"):
+            raise HTTPException(400, "cli는 claude 또는 codex입니다")
+        return agents.create(agents.AgentIn(**{**args, "extensions": []}))
+    return None
+
+
 def _call_tool(agent: dict, name: str, args: dict) -> dict:
     result = _todo_tool(name, dict(args))
+    if result is None:
+        result = _agent_tool(agent, name, dict(args))
     if result is not None:
         return _text(result)
     with db.connect() as conn:

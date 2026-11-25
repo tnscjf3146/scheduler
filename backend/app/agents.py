@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shutil
 import time
@@ -20,6 +21,7 @@ class AgentIn(BaseModel):
     persona: str = Field(default="", max_length=4000)  # goes only into AGENTS.md, which the user edits from then on
     cli: str = Field(pattern="^(claude|codex|shell)$")
     cwd: str | None = None
+    extensions: list[str] = Field(default=[], max_length=50)  # skill / harness ids to attach (Claude Code only)
 
 
 AGENTS_MD = """# {name}
@@ -55,6 +57,17 @@ AGENTS_MD = """# {name}
 - `update_todo`: `id`와 바꿀 값만. 완료 처리는 `done: true`. `memo`(메모)와 `subtasks`(하위 할 일 `[{{"title", "done"}}]`)는 통째로 바뀌니 읽은 뒤 고쳐서 보낸다.
 - `delete_todo`: 되돌릴 수 없다. 사용자가 지우라고 한 것만 지운다.
 - 사용자가 "내일", "다음 주 월요일"처럼 말하면 오늘 날짜를 기준으로 계산한다. 시간을 말하지 않았으면 09:00으로 둔다.
+
+## 스킬 · 하네스 · 에이전트
+
+사용자가 부탁하면 `scheduler` MCP 서버의 도구로 만든다.
+
+- `create_skill`: 스킬(`name`, 언제 쓰는지 `description`, 내용 `body`)을 앱의 "스킬 & 하네스" 목록에 넣는다.
+- `create_hook`: 하네스(Claude Code 훅. `name`, 시점 `event`, 대상 도구 `matcher`, 명령 `command`, 설명 `description`)를 넣는다.
+- `list_extensions`: 앱에 있는 스킬과 하네스, 붙은 에이전트를 본다.
+- `create_agent`: 에이전트(`name`, `role`, `persona`, `cli`, `cwd`)를 만든다. 사용자가 만들라고 한 경우에만 쓴다.
+- `list_agents`: 에이전트 목록을 본다.
+- 만든 스킬과 하네스를 에이전트에 붙이는 것은 사용자가 화면에서 한다. 너는 붙일 수 없다.
 
 ## 할 수 없는 것
 
@@ -113,8 +126,8 @@ def create(body: AgentIn) -> dict:
 
 def _insert(conn, agent_id: str, body: AgentIn, workspace: Path) -> dict:
     conn.execute(
-        "INSERT INTO agents (id, name, role, cli, cwd, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (agent_id, body.name.strip(), body.role.strip(), body.cli, str(workspace), db.now()),
+        "INSERT INTO agents (id, name, role, cli, cwd, created_at, extensions) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (agent_id, body.name.strip(), body.role.strip(), body.cli, str(workspace), db.now(), json.dumps(body.extensions)),
     )
     return {**_get(conn, agent_id), "status": "stopped"}
 

@@ -49,6 +49,21 @@ CREATE TABLE IF NOT EXISTS agents (
     role TEXT NOT NULL DEFAULT '',
     cli TEXT NOT NULL,                   -- 'claude' | 'codex' | 'shell'
     cwd TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    extensions TEXT NOT NULL DEFAULT '[]'   -- ids of attached skills and harness (extensions table)
+);
+
+-- Skills and harness (Claude Code hooks) the user keeps in the app and attaches to agents.
+CREATE TABLE IF NOT EXISTS extensions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,                  -- 'skill' | 'hook'
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',       -- skill: SKILL.md body
+    event TEXT NOT NULL DEFAULT '',      -- hook: e.g. PreToolUse
+    matcher TEXT NOT NULL DEFAULT '',    -- hook: which tools, for tool events
+    command TEXT NOT NULL DEFAULT '',    -- hook: command to run
+    created_by TEXT,                     -- agent name when an agent made it through MCP, until the user saves it
     created_at TEXT NOT NULL
 );
 
@@ -129,6 +144,9 @@ def init() -> None:
                          ("fields", "TEXT NOT NULL DEFAULT '[]'")):
             if col not in approval_cols:
                 conn.execute(f"ALTER TABLE approvals ADD COLUMN {col} {ddl}")
+        agent_cols = {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}
+        if "extensions" not in agent_cols:
+            conn.execute("ALTER TABLE agents ADD COLUMN extensions TEXT NOT NULL DEFAULT '[]'")
         if not conn.execute("SELECT 1 FROM forms").fetchone():  # starter forms; the user can change or delete them
             for name, kind, labels in DEFAULT_FORMS:
                 fields = [{"label": l, "long": True} for l in labels]

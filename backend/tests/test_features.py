@@ -418,3 +418,47 @@ def test_forms_shape_submitted_documents(client, tmp_path):
     assert client.get(f"/api/approvals/{doc['id']}").json()["fields"][0]["label"] == "이번 주"
     # a shell agent cannot be asked to write one (the line would run as a command)
     assert client.post(f"/api/forms/{form['id']}/request", json={"agent_id": agent["id"], "instruction": "써 줘"}).status_code == 400
+
+
+def test_skills_and_harness_reach_the_agent_as_a_plugin(client, tmp_path, monkeypatch):
+    import json
+
+    from app import db, extensions, sessions
+
+    # what the user already has in ~/.claude
+    home = tmp_path / "claude-home"
+    (home / "skills" / "writing").mkdir(parents=True)
+    (home / "skills" / "writing" / "SKILL.md").write_text("---\nname: writing\ndescription: 문서를 쓸 때\n---\n\n# 규칙\n짧게 쓴다.\n", encoding="utf-8")
+    (home / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "notify.exe done"}]}]}}), encoding="utf-8")
+    monkeypatch.setenv("SCHEDULER_CLAUDE_HOME", str(home))
+    have = client.get("/api/extensions/installed").json()
+    assert {(h["kind"], h["name"]) for h in have} == {("skill", "writing"), ("hook", "Stop · notify.exe")}
+
+    skill = client.post("/api/extensions", json={k: v for k, v in have[0].items() if k != "source"}).json()
+    assert client.post("/api/extensions", json={"kind": "hook", "name": "x", "event": "PreToolUse"}).status_code == 422  # no command
+
+    # an agent creates a hook and another agent through MCP; it cannot attach the hook to anyone
+    me = client.post("/api/agents", json={"name": "비서", "cli": "claude", "cwd": str(tmp_path)}).json()
+    call = lambda tool, **args: json.loads(rpc(client, me["id"], "tools/call", {"name": tool, "arguments": args})["result"]["content"][0]["text"])
+    hook = call("create_hook", name="커밋 전 테스트", event="PreToolUse", matcher="Bash", command="pytest -q")
+    assert (hook["created_by"], hook["agent_ids"]) == ("비서", [])
+    made = call("create_agent", name="리뷰 담당", cli="codex")
+    assert made["name"] in [a["name"] for a in call("list_agents")]
+
+    # the user attaches both to the agent; its launch builds a plugin with them and passes --plugin-dir
+    for ext in (skill, hook):
+        assert client.put(f"/api/extensions/{ext['id']}/agents", json={"agent_ids": [me["id"]]}).json()["agent_ids"] == [me["id"]]
+    with db.connect() as conn:
+        agent = dict(conn.execute("SELECT * FROM agents WHERE id = ?", (me["id"],)).fetchone())
+    script = sessions._launch_script(agent, "http://x/mcp").read_text(encoding="utf-8-sig")
+    plugin = db.data_dir() / "agents" / me["id"] / "plugin"
+    assert f"--plugin-dir '{plugin}'" in script
+    assert "짧게 쓴다." in (plugin / "skills" / "writing" / "SKILL.md").read_text(encoding="utf-8")
+    hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    assert hooks == {"PreToolUse": [{"hooks": [{"type": "command", "command": "pytest -q"}], "matcher": "Bash"}]}
+
+    # deleting it detaches it; the next launch drops the plugin
+    client.delete(f"/api/extensions/{skill['id']}")
+    client.delete(f"/api/extensions/{hook['id']}")
+    assert extensions.build_plugin({**agent, "extensions": json.dumps([skill["id"], hook["id"]])}) is None
+    assert not plugin.exists()

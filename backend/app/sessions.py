@@ -11,7 +11,7 @@ from pathlib import Path
 
 from winpty import PtyProcess
 
-from . import db
+from . import db, extensions
 
 SCROLLBACK = 256_000  # characters replayed to a newly opened terminal view
 ANSI = re.compile(r"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78]")
@@ -45,11 +45,14 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
 
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
-        start = f"claude --mcp-config {_ps_quote(str(mcp_json))}"
+        # The skills and harness attached to this agent, as a plugin (see extensions.py).
+        plugin = extensions.build_plugin(agent)
+        args = f"--mcp-config {_ps_quote(str(mcp_json))}" + (f" --plugin-dir {_ps_quote(str(plugin))}" if plugin else "")
+        start = f"claude {args}"
         if not is_fresh and _has_claude_history(agent["cwd"]):
             # A saved file is no promise --continue accepts it (e.g. a conversation Claude Code ran as a background
             # session): it then prints "No conversation found to continue" and exits, so start a new one instead.
-            lines.append(f"claude --continue --mcp-config {_ps_quote(str(mcp_json))}")
+            lines.append(f"claude --continue {args}")
             lines.append(f"if ($LASTEXITCODE) {{ {start} }}")
         else:
             lines.append(start)

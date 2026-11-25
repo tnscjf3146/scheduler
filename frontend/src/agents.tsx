@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { api, type Agent } from './api'
+import { api, type Agent, type Extension } from './api'
+import { ExtensionList, ExtensionPicker, blankExtension } from './extensions'
 import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
 
 // Injected by the exe window (backend/desktop.py JsApi); absent in a dev browser.
@@ -63,6 +64,19 @@ export function Agents({
   // The open ⋯ menu: which agent, and where on screen (right beside the button that opened it).
   const [menu, setMenuAt] = useState<{ id: string; x: number; y: number } | null>(null)
   const setMenu = (m: null) => setMenuAt(m)
+  // Second tab: the skills and harness the user keeps, to attach to agents.
+  const [tab, setTab] = useState<'agents' | 'ext'>('agents')
+  const [exts, setExts] = useState<Extension[]>([])
+  const [editingExt, setEditingExt] = useState<Parameters<typeof ExtensionList>[0]['editing']>(null)
+  const loadExts = () => api<Extension[]>('/api/extensions').then(setExts, () => {})
+  useEffect(() => {
+    if (tab === 'ext') loadExts()
+  }, [tab])
+  const tabButton = (t: typeof tab, label: string) => (
+    <button type="button" onClick={() => setTab(t)} aria-pressed={tab === t} className={tab === t ? 'text-neutral-900' : 'font-medium text-neutral-400 hover:text-neutral-700'}>
+      {label}
+    </button>
+  )
 
   async function act(agent: Agent, action: 'restart' | 'fire' | 'delete') {
     setMenu(null)
@@ -89,9 +103,27 @@ export function Agents({
   }
 
   return (
-    <Widget title="Agent" action={<LinkButton onClick={() => setAdding({})}>+ 추가</LinkButton>}>
-      {agents.length === 0 && <Empty>에이전트를 추가하세요</Empty>}
-      {agents.map((a) => (
+    <Widget
+      title={
+        <span className="flex gap-3">
+          {tabButton('agents', 'Agent')}
+          {tabButton('ext', '스킬 & 하네스')}
+        </span>
+      }
+      action={
+        tab === 'agents' ? (
+          <LinkButton onClick={() => setAdding({})}>+ 추가</LinkButton>
+        ) : (
+          <span className="flex gap-3">
+            <LinkButton onClick={() => setEditingExt('import')}>가져오기</LinkButton>
+            <LinkButton onClick={() => setEditingExt(blankExtension('skill'))}>+ 만들기</LinkButton>
+          </span>
+        )
+      }
+    >
+      {tab === 'ext' && <ExtensionList agents={agents} items={exts} reload={loadExts} editing={editingExt} setEditing={setEditingExt} />}
+      {tab === 'agents' && agents.length === 0 && <Empty>에이전트를 추가하세요</Empty>}
+      {tab === 'agents' && agents.map((a) => (
         <div
           key={a.id}
           onClick={() => onSelect(a.id)}
@@ -179,6 +211,7 @@ export function Agents({
 
 function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => void; onAdded: (a: Agent) => void }) {
   const [form, setForm] = useState({ name: '', role: '', persona: '', cli: from?.cli ?? ('claude' as Agent['cli']), cwd: '' })
+  const [extIds, setExtIds] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [k]: e.target.value })
@@ -191,7 +224,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
   async function submit() {
     try {
       const url = from ? `/api/agents/${from.id}/handover` : '/api/agents'
-      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null } }))
+      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null, extensions: form.cli === 'claude' ? extIds : [] } }))
     } catch (err) {
       setError((err as Error).message)
     }
@@ -259,6 +292,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
         </div>
       </label>
       )}
+      <ExtensionPicker value={extIds} onChange={setExtIds} cli={form.cli} />
       <p className="text-[11px] text-neutral-500">CLI 로그인은 터미널에서 처음 실행될 때 CLI가 직접 안내합니다.</p>
     </Modal>
   )
