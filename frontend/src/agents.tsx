@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, type Agent } from './api'
 import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
 
@@ -59,7 +60,9 @@ export function Agents({
 }) {
   // null: closed. {}: add a new agent. { from }: hand `from`'s work folder over to a new agent.
   const [adding, setAdding] = useState<{ from?: Agent } | null>(null)
-  const [menu, setMenu] = useState<string | null>(null)
+  // The open ⋯ menu: which agent, and where on screen (right beside the button that opened it).
+  const [menu, setMenuAt] = useState<{ id: string; x: number; y: number } | null>(null)
+  const setMenu = (m: null) => setMenuAt(m)
 
   async function act(agent: Agent, action: 'restart' | 'fire' | 'delete') {
     setMenu(null)
@@ -106,15 +109,24 @@ export function Agents({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              setMenu(menu === a.id ? null : a.id)
+              const r = e.currentTarget.getBoundingClientRect()
+              setMenuAt(menu?.id === a.id ? null : { id: a.id, x: r.right + 6, y: r.top })
             }}
             className="px-1 text-sm opacity-60 hover:opacity-100"
             aria-label="메뉴"
           >
             ⋯
           </button>
-          {menu === a.id && (
-            <div className="absolute top-full right-2 z-10 mt-1 flex w-28 flex-col rounded-md border border-neutral-200 bg-white py-1 text-xs text-neutral-900 shadow-md" onClick={(e) => e.stopPropagation()}>
+          {menu?.id === a.id &&
+            // On <body>: the widget's scroll area would clip a menu sticking out past its edge.
+            createPortal(
+              <div className="fixed inset-0 z-20" onMouseDown={() => setMenu(null)}>
+            <div
+              style={{ left: Math.min(menu.x, window.innerWidth - 120), top: Math.min(menu.y, window.innerHeight - 170) }}
+              className="fixed flex w-28 flex-col rounded-md border border-neutral-200 bg-white py-1 text-xs text-neutral-900 shadow-md"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
               <button className="px-3 py-1.5 text-left hover:bg-neutral-100" onClick={() => act(a, 'restart')}>
                 재시작
               </button>
@@ -145,7 +157,9 @@ export function Agents({
                 삭제
               </button>
             </div>
-          )}
+              </div>,
+              document.body,
+            )}
         </div>
       ))}
       {adding && (
