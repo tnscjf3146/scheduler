@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS mails (
     reply_draft TEXT,
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | ready | failed
     sent_at TEXT,
+    read_at TEXT,                        -- first opened in the app (local only; the mailbox is opened read-only)
     UNIQUE (account_id, uid)
 );
 """
@@ -106,8 +107,10 @@ def init() -> None:
         for col, ddl in (("memo", "TEXT NOT NULL DEFAULT ''"), ("subtasks", "TEXT NOT NULL DEFAULT '[]'")):
             if col not in todo_cols:
                 conn.execute(f"ALTER TABLE todos ADD COLUMN {col} {ddl}")
-        if "body_html" not in {r["name"] for r in conn.execute("PRAGMA table_info(mails)")}:
-            conn.execute("ALTER TABLE mails ADD COLUMN body_html TEXT")
+        mail_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mails)")}
+        for col in ("body_html", "read_at"):
+            if col not in mail_cols:
+                conn.execute(f"ALTER TABLE mails ADD COLUMN {col} TEXT")
 
 
 def rows(cursor) -> list[dict]:

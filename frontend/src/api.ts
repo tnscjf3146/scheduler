@@ -28,6 +28,7 @@ export type MailItem = {
   summary_title: string | null
   status: 'pending' | 'ready' | 'failed'
   sent_at: string | null
+  read_at: string | null
   account: string
 }
 export type Mail = MailItem & { body: string; body_html: string | null; summary: string | null; reply_draft: string | null }

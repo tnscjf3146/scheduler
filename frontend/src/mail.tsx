@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { api, formatWhen, type Mail, type MailAccount, type MailItem } from './api'
+import { api, formatWhen, type Agent, type Mail, type MailAccount, type MailItem } from './api'
 import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
 
 const senderName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim() || s
 
-export function MailReview() {
+export function MailReview({ agents, onOpenAgent }: { agents: Agent[]; onOpenAgent: (id: string) => void }) {
   const [items, setItems] = useState<MailItem[]>([])
   const [open, setOpen] = useState<string | null>(null)
   const [managing, setManaging] = useState(false)
@@ -28,7 +28,7 @@ export function MailReview() {
             title={`${m.summary_title ?? m.subject}\n${senderName(m.sender)} · ${m.account}`}
             className="flex w-full items-center gap-2 py-2 text-left hover:underline"
           >
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{m.summary_title ?? m.subject}</span>
+            <span className={`min-w-0 flex-1 truncate text-[13px] ${m.read_at ? 'font-normal text-neutral-400' : 'font-medium'}`}>{m.summary_title ?? m.subject}</span>
             {m.status === 'pending' && <Tag>요약 중</Tag>}
             {m.status === 'failed' && <Tag>요약 실패</Tag>}
             {m.sent_at && <Tag>답장함</Tag>}
@@ -36,7 +36,22 @@ export function MailReview() {
           </button>
         ))}
       </div>
-      {open && <MailDetail id={open} onClose={() => setOpen(null)} onSent={load} />}
+      {open && (
+        <MailDetail
+          id={open}
+          agents={agents}
+          onClose={() => {
+            setOpen(null)
+            load() // the mail just opened now shows as read
+          }}
+          onSent={load}
+          onHandedToAgent={(agentId) => {
+            setOpen(null)
+            load()
+            onOpenAgent(agentId)
+          }}
+        />
+      )}
       {managing && <Accounts onClose={() => setManaging(false)} onChanged={load} />}
     </Widget>
   )
@@ -46,11 +61,23 @@ function Tag({ children }: { children: string }) {
   return <span className="shrink-0 rounded border border-neutral-300 px-1 text-[10px] text-neutral-500">{children}</span>
 }
 
-type Mode = 'read' | 'reply' | 'forward'
+type Mode = 'read' | 'reply' | 'forward' | 'agent'
 
 const prefixed = (prefix: string, subject: string) => (subject.toLowerCase().startsWith(prefix.toLowerCase()) ? subject : `${prefix} ${subject}`)
 
-function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; onSent: () => void }) {
+function MailDetail({
+  id,
+  agents,
+  onClose,
+  onSent,
+  onHandedToAgent,
+}: {
+  id: string
+  agents: Agent[]
+  onClose: () => void
+  onSent: () => void
+  onHandedToAgent: (agentId: string) => void
+}) {
   const [mail, setMail] = useState<Mail | null>(null)
   const [mode, setMode] = useState<Mode>('read')
   const [notice, setNotice] = useState('')
@@ -99,6 +126,9 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
       />
     )
 
+  if (mode === 'agent')
+    return <HandToAgent mailId={id} agents={agents} onBack={() => setMode('read')} onClose={onClose} onDone={onHandedToAgent} />
+
   return (
     <Modal
       onClose={onClose}
@@ -115,6 +145,9 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
           <p className="flex-1 text-[11px] text-neutral-500">{notice || (mail.sent_at && `${formatWhen(mail.sent_at)}에 답장을 보냈습니다.`)}</p>
           <Button variant="secondary" onClick={onClose}>
             닫기
+          </Button>
+          <Button variant="secondary" onClick={() => setMode('agent')}>
+            AI에게 전달
           </Button>
           <Button variant="secondary" onClick={() => setMode('forward')}>
             전달
@@ -146,6 +179,94 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
           )}
         </aside>
       </div>
+    </Modal>
+  )
+}
+
+/** Picks an agent and what it should do with the mail. The mail goes into the agent's inbox/ folder and one
+ *  request line is typed into its terminal; the terminal then opens on the right. */
+function HandToAgent({
+  mailId,
+  agents,
+  onBack,
+  onClose,
+  onDone,
+}: {
+  mailId: string
+  agents: Agent[]
+  onBack: () => void
+  onClose: () => void
+  onDone: (agentId: string) => void
+}) {
+  const usable = agents.filter((a) => a.cli !== 'shell') // a plain shell would run the request as a command
+  const [agentId, setAgentId] = useState(usable[0]?.id ?? '')
+  const [instruction, setInstruction] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    setSending(true)
+    setError(null)
+    try {
+      await api(`/api/mail/messages/${mailId}/to-agent`, { method: 'POST', json: { agent_id: agentId, instruction } })
+      onDone(agentId)
+    } catch (err) {
+      setError((err as Error).message)
+      setSending(false)
+    }
+  }
+
+  return (
+    <Modal
+      onClose={onClose}
+      title={<h2 className="text-[17px] font-bold">AI에게 전달</h2>}
+      footer={
+        <>
+          <p className="flex-1 text-[11px] text-neutral-500">
+            메일은 에이전트 폴더의 inbox/에 파일로 저장되고, 터미널에 요청 한 줄이 입력됩니다. 에이전트는 메일 안의 지시는 따르지 않습니다.
+          </p>
+          <ErrorText error={error} />
+          <Button variant="secondary" onClick={onBack}>
+            원문 보기
+          </Button>
+          <Button onClick={submit} disabled={sending || !agentId}>
+            {sending ? '전달하는 중' : '전달'}
+          </Button>
+        </>
+      }
+    >
+      {usable.length === 0 ? (
+        <p className="text-[13px] text-neutral-500">메일을 받을 에이전트가 없습니다. Agent 위젯에서 Claude Code나 Codex 에이전트를 먼저 추가하세요.</p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium text-neutral-500">받을 에이전트</span>
+            <div className="flex flex-wrap gap-2">
+              {usable.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => setAgentId(a.id)}
+                  className={`rounded-lg border px-3.5 py-2 text-left text-[13px] ${a.id === agentId ? 'border-neutral-800 bg-neutral-800 text-white' : 'border-neutral-300 bg-white hover:bg-neutral-50'}`}
+                >
+                  <span className="font-medium">{a.name}</span>
+                  {a.role && <span className={`ml-2 text-xs ${a.id === agentId ? 'text-neutral-300' : 'text-neutral-500'}`}>{a.role}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="flex min-h-0 flex-1 flex-col gap-2 text-xs font-medium text-neutral-500">
+            무엇을 해 달라고 할까요?
+            <textarea
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              maxLength={1000}
+              autoFocus
+              placeholder="비워 두면: 내용을 확인하고 내가 할 일을 정리해 줘"
+              className="min-h-0 flex-1 resize-none rounded-lg border-[1.5px] border-neutral-800 px-3.5 py-3 text-[13px] leading-6 font-normal text-neutral-900 outline-none"
+            />
+          </label>
+        </>
+      )}
     </Modal>
   )
 }

@@ -252,3 +252,101 @@ def test_imap_idle_wakes_on_new_mail():
     assert _wait_for_mail(conn) is True
     assert conn.sent == [b"A1 IDLE\r\n"]
     assert _wait_for_mail(FakeConn([b"A1 BAD no idle\r\n"])) is False
+
+
+def _seed_mail(tmp_path):
+    import sqlite3
+
+    db = sqlite3.connect(tmp_path / "scheduler.db")
+    db.execute("INSERT INTO mail_accounts (id,label,email,imap_host,imap_port,smtp_host,smtp_port,created_at) "
+               "VALUES ('acc1','네이버','me@naver.com','imap.naver.com',993,'smtp.naver.com',465,'2026-11-25T09:00:00')")
+    db.execute("INSERT INTO mails (id,account_id,uid,sender,subject,received_at,body,body_html,summary,status) "
+               "VALUES ('m1','acc1',1,'Kim <kim@a.com>','견적 문의 / 급함','2026-11-25T09:23:00','원문 내용','',"
+               "'• 견적 요청','ready')")
+    db.commit()
+
+
+def test_opening_a_mail_marks_it_read(client, tmp_path):
+    _seed_mail(tmp_path)
+    assert client.get("/api/mail/messages").json()[0]["read_at"] is None
+    client.get("/api/mail/messages/m1")
+    first = client.get("/api/mail/messages").json()[0]["read_at"]
+    assert first is not None
+    client.get("/api/mail/messages/m1")
+    assert client.get("/api/mail/messages").json()[0]["read_at"] == first  # first-open time is kept
+
+
+def test_hand_mail_to_agent(client, tmp_path, monkeypatch):
+    import threading
+
+    from app import sessions
+
+    _seed_mail(tmp_path)
+    typed, done = [], threading.Event()
+
+    class FakeSession:
+        def at_shell_prompt(self):
+            return False
+
+        def type_when_ready(self, text):
+            typed.append(text)
+            done.set()
+
+    monkeypatch.setattr(sessions, "get_or_start", lambda *a: FakeSession())
+    work = tmp_path / "work"
+    work.mkdir()
+    agent = client.post("/api/agents", json={"name": "비서", "cli": "claude", "cwd": str(work)}).json()
+
+    res = client.post("/api/mail/messages/m1/to-agent", json={"agent_id": agent["id"], "instruction": "답장 초안\n써 줘"})
+    assert res.status_code == 200
+    assert done.wait(5)
+    saved = list((work / "inbox").iterdir())
+    assert len(saved) == 1 and saved[0].name.startswith("2026-11-25-")
+    text = saved[0].read_text(encoding="utf-8")
+    assert "원문 내용" in text and "따르지 않는다" in text
+    assert typed == [typed[0]] and f"inbox/{saved[0].name}" in typed[0] and "요청: 답장 초안 써 줘" in typed[0]
+    assert "\n" not in typed[0]  # one line: the instruction cannot sneak in an extra Enter
+
+    shell = client.post("/api/agents", json={"name": "셸", "cli": "shell", "cwd": str(work)}).json()
+    assert client.post("/api/mail/messages/m1/to-agent", json={"agent_id": shell["id"]}).status_code == 400
+
+
+def _bare_session(monkeypatch, typed):
+    """A Session without a real terminal, to test only the waiting logic."""
+    import threading
+
+    from app import sessions
+
+    s = sessions.Session.__new__(sessions.Session)
+    s.buffer, s.received, s.lock, s.subscribers = "", 0, threading.Lock(), []
+    monkeypatch.setattr(sessions.Session, "alive", property(lambda self: True))
+    monkeypatch.setattr(sessions.Session, "type_line", lambda self, t: typed.append(t))
+    monkeypatch.setattr(sessions.Session, "wait_until_quiet", lambda self, **k: None)
+    return s
+
+
+def test_typing_waits_for_trust_question(monkeypatch):
+    import threading
+    import time
+
+    typed = []
+    s = _bare_session(monkeypatch, typed)
+    # Claude Code draws with cursor moves, so the words may arrive without spaces
+    s._emit("\x1b[1mSecurity guide\x1b[0m\r\n\x1b[2C❯No,exit\r\nYes,Itrustthisfolder\r\nEntertoconfirm\r\n")
+    t = threading.Thread(target=s.type_when_ready, args=("hello",))
+    t.start()
+    time.sleep(1.2)
+    assert typed == []  # still on the trust question: nothing typed, no Enter pressed
+    s._emit("\x1b[2J" + "Welcome to Claude Code " * 20 + "\r\n> ")
+    t.join(5)
+    assert typed == ["hello"]
+
+
+def test_no_typing_into_a_bare_shell(monkeypatch):
+    typed = []
+    s = _bare_session(monkeypatch, typed)
+    s._emit("Claude Code didn't start.\r\n(base) PS C:\\Users\\me\\work> ")
+    assert s.at_shell_prompt()
+    assert s.type_when_ready("hello", timeout=1) is False
+    assert typed == []
+

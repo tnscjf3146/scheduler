@@ -66,7 +66,7 @@ export default function App() {
           <Calendar todos={todos} />
         </div>
         <div className="flex min-w-0 min-h-0 flex-[32] flex-col gap-4">
-          <MailReview />
+          <MailReview agents={agents} onOpenAgent={setSelected} />
           <Approvals />
         </div>
         <TerminalPanel key={restarts} agent={agent} onStatus={loadAgents} />

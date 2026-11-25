@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 from winpty import PtyProcess
@@ -11,6 +12,9 @@ from winpty import PtyProcess
 from . import db
 
 SCROLLBACK = 256_000  # characters replayed to a newly opened terminal view
+ANSI = re.compile(r"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78]")
+# Claude Code: "Yes, I trust this folder". Codex: "Do you trust the contents of this directory?"
+TRUST_PROMPT = re.compile(r"trust\s*this\s*folder|trust\s*the\s*contents|do\s*you\s*trust", re.I)
 FRESH_MARKER = "fresh"  # in an agent's folder: start a new conversation next launch instead of continuing
 
 
@@ -60,6 +64,7 @@ class Session:
             cwd=agent["cwd"], dimensions=(rows, cols),
         )
         self.buffer = ""
+        self.received = 0  # total characters ever printed (buffer is capped, this is not)
         self.lock = threading.Lock()
         self.subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = []
         threading.Thread(target=self._read, daemon=True).start()
@@ -77,6 +82,7 @@ class Session:
     def _emit(self, data: str) -> None:
         with self.lock:
             self.buffer = (self.buffer + data)[-SCROLLBACK:]
+            self.received += len(data)
             for loop, queue in self.subscribers:
                 loop.call_soon_threadsafe(queue.put_nowait, data)
 
@@ -97,6 +103,53 @@ class Session:
     def write(self, data: str) -> None:
         if self.alive:
             self.pty.write(data)
+
+    def wait_until_quiet(self, quiet: float = 1.5, timeout: float = 20.0) -> None:
+        """Waits until the CLI has drawn something and then stopped, i.e. its start-up screen is ready for input."""
+        # ponytail: output silence as the ready signal; a CLI that keeps animating just waits for the timeout.
+        end, last, since = time.monotonic() + timeout, -1, time.monotonic()
+        while time.monotonic() < end and self.alive:
+            if self.received != last:
+                last, since = self.received, time.monotonic()
+            elif last > 0 and time.monotonic() - since >= quiet:
+                return
+            time.sleep(0.2)
+
+    def type_line(self, text: str) -> None:
+        """Puts one line in the CLI's input and presses Enter. A TUI such as Claude Code reads a burst of characters
+        as a paste and swallows an Enter that follows too closely, so the text goes in as a marked (bracketed) paste
+        when the CLI asked for that, and Enter comes separately once the paste has been taken in."""
+        if "\x1b[?2004h" in self.buffer:  # the CLI turned on bracketed paste
+            text = f"\x1b[200~{text}\x1b[201~"
+        self.write(text)
+        time.sleep(1.0)
+        self.write("\r")
+
+    def screen_tail(self, chars: int = 3000) -> str:
+        """The end of the output as plain text (escape codes removed), for checking what the CLI is showing."""
+        return ANSI.sub("", self.buffer[-chars:])
+
+    def at_shell_prompt(self) -> bool:
+        """True when the agent's CLI has exited and PowerShell is waiting: typed text would run as a command."""
+        lines = [l for l in self.screen_tail(1500).replace("\r", "").split("\n") if l.strip()]
+        return bool(lines) and bool(re.search(r"PS [A-Za-z]:\\[^>]*>\s*$", lines[-1]))
+
+    def type_when_ready(self, text: str, timeout: float = 300.0) -> bool:
+        """Types the line once the CLI is idle. While its "trust this folder?" question is on screen it waits
+        for the user to answer; Enter there would pick the default, which is "No, exit". False if it gave up."""
+        self.wait_until_quiet()
+        end = time.monotonic() + timeout
+        shown = self.screen_tail()
+        while TRUST_PROMPT.search(shown) and self.alive and time.monotonic() < end:
+            mark = self.received
+            while self.received - mark < 200 and self.alive and time.monotonic() < end:
+                time.sleep(0.5)  # until the CLI redraws (the user answered, or e.g. the window was resized)
+            self.wait_until_quiet()
+            shown = ANSI.sub("", self.buffer[-(self.received - mark):])  # only what came after the question
+        if not self.alive or time.monotonic() >= end or self.at_shell_prompt():
+            return False
+        self.type_line(text)
+        return True
 
     def resize(self, cols: int, rows: int) -> None:
         if self.alive:
