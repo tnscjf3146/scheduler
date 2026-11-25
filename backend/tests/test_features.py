@@ -220,7 +220,8 @@ def test_launch_continues_previous_conversation(tmp_path, monkeypatch):
     monkeypatch.setenv("SCHEDULER_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cwd = str(tmp_path / "work")
-    read = lambda cli: sessions._launch_script({"id": cli, "cli": cli, "cwd": cwd}, "http://x/mcp").read_text(encoding="utf-8-sig")
+    (tmp_path / "work").mkdir()
+    read = lambda cli: sessions._launch_script({"id": cli, "name": cli, "cli": cli, "cwd": cwd}, "http://x/mcp").read_text(encoding="utf-8-sig")
 
     assert "--continue" not in read("claude")
     project = tmp_path / ".claude" / "projects" / __import__("re").sub(r"[^A-Za-z0-9]", "-", cwd)
@@ -483,3 +484,16 @@ def test_skill_rules_live_in_a_skill_not_in_code(client, tmp_path):
     res = rpc(client, me["id"], "tools/call", {"name": "create_skill", "arguments": {
         "name": "react-rules", "description": "React 컴포넌트를 만들 때", "body": "`useEffect` 대신 이벤트 핸들러를 먼저 쓴다."}})["result"]
     assert json.loads(res["content"][0]["text"])["name"] == "react-rules"
+
+
+def test_launch_restores_missing_agents_md_without_touching_existing(client, tmp_path):
+    from app import db, sessions
+
+    a = client.post("/api/agents", json={"name": "옛 에이전트", "role": "정리", "cli": "claude", "cwd": str(tmp_path)}).json()
+    (tmp_path / "AGENTS.md").unlink()  # like an agent made before AGENTS.md existed
+    (tmp_path / "CLAUDE.md").write_text("내가 고친 내용\n", encoding="utf-8")
+    with db.connect() as conn:
+        agent = dict(conn.execute("SELECT * FROM agents WHERE id = ?", (a["id"],)).fetchone())
+    sessions._launch_script(agent, "http://x/mcp")
+    assert "옛 에이전트" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == "내가 고친 내용\n"

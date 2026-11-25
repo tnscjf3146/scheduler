@@ -43,6 +43,11 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
     is_fresh = fresh.exists()
     fresh.unlink(missing_ok=True)
 
+    # Agents made before AGENTS.md existed (or whose file was deleted) get it now; existing files are left alone.
+    from .agents import _write_instructions  # agents imports this module, so import here
+
+    _write_instructions(Path(agent["cwd"]), agent["name"], agent.get("role") or "", "")
+
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
         # The skills and harness attached to this agent, as a plugin (see extensions.py).
