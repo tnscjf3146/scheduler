@@ -14,23 +14,38 @@ export function Approvals({ agents, onOpenAgent }: { agents: Agent[]; onOpenAgen
   const [items, setItems] = useState<Approval[]>([])
   const [open, setOpen] = useState<Approval | null>(null)
   const [forms, setForms] = useState(false)
-  const load = () => api<Approval[]>('/api/approvals?status=pending').then(setItems, () => {})
+  const [showDone, setShowDone] = useState(false) // 완료: approved approvals and confirmed reports
+  const load = () => api<Approval[]>(`/api/approvals?status=${showDone ? 'approved' : 'pending'}`).then(setItems, () => {})
 
   useEffect(() => {
     load()
     const timer = setInterval(load, 5_000)
     return () => clearInterval(timer)
-  }, [])
+  }, [showDone])
+
+  const tab = (done: boolean, label: string) => (
+    <button type="button" onClick={() => setShowDone(done)} aria-pressed={showDone === done} className={showDone === done ? 'text-neutral-900' : 'font-medium text-neutral-400 hover:text-neutral-700'}>
+      {label}
+    </button>
+  )
 
   return (
-    <Widget title="결정 사항" action={<LinkButton onClick={() => setForms(true)}>양식</LinkButton>}>
-      {items.length === 0 && <Empty>올라온 결재나 보고가 없습니다</Empty>}
+    <Widget
+      title={
+        <span className="flex gap-3">
+          {tab(false, '결정 사항')}
+          {tab(true, '완료')}
+        </span>
+      }
+      action={<LinkButton onClick={() => setForms(true)}>양식</LinkButton>}
+    >
+      {items.length === 0 && <Empty>{showDone ? '승인하거나 확인한 문서가 없습니다' : '올라온 결재나 보고가 없습니다'}</Empty>}
       {items.map((a) => (
         <button key={a.id} onClick={() => setOpen(a)} className="flex items-center gap-2 rounded-md bg-neutral-100 px-3 py-2 text-left hover:bg-neutral-200">
           <span className="shrink-0 rounded border border-neutral-300 bg-white px-1 text-[10px] text-neutral-500">{KIND_LABEL[a.kind]}</span>
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{a.title}</span>
           <span className="shrink-0 text-[11px] text-neutral-500">
-            {a.agent_name} · {formatWhen(a.created_at)}
+            {a.agent_name} · {formatWhen(showDone && a.decided_at ? a.decided_at : a.created_at)}
           </span>
         </button>
       ))}

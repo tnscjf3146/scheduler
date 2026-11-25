@@ -1,3 +1,4 @@
+import json
 import re
 import time
 from datetime import datetime, timedelta
@@ -507,7 +508,7 @@ def test_new_agents_get_the_default_skills(client, tmp_path):
     import json
 
     builtin = {x["name"]: x["id"] for x in client.get("/api/extensions").json() if x["builtin"]}
-    assert set(builtin) == {"approval-rules", "todo-rules", "agent-tools-rules", "skill-writing-rules"}
+    assert set(builtin) == {"approval-rules", "todo-rules", "agent-tools-rules", "mail-rules", "browser-rules", "skill-writing-rules"}
 
     plain = client.post("/api/agents", json={"name": "기본", "cli": "claude"}).json()
     picked = client.post("/api/agents", json={"name": "직접 고름", "cli": "claude", "extensions": []}).json()
@@ -517,3 +518,166 @@ def test_new_agents_get_the_default_skills(client, tmp_path):
     # an agent made through MCP gets the defaults too, and nothing else
     res = rpc(client, plain["id"], "tools/call", {"name": "create_agent", "arguments": {"name": "부하", "cli": "claude"}})["result"]
     assert sorted(on(json.loads(res["content"][0]["text"])["id"])) == sorted(builtin)
+
+
+def test_unedited_default_skills_get_the_new_text(client):
+    from app import db
+    from app.defaults import DEFAULT_SKILLS
+
+    with db.connect() as conn:  # pretend an older app put the skills in, and the user edited one of them
+        conn.execute("UPDATE meta SET value = 'old' WHERE key LIKE 'seeded_skill:%'")
+        conn.execute("UPDATE extensions SET body = 'old' WHERE builtin = 1")
+        conn.execute("UPDATE extensions SET body = 'mine' WHERE name = 'todo-rules'")
+        conn.execute("UPDATE extensions SET description = '', body = '' WHERE name = 'approval-rules'")
+        db._seed_default_skills(conn)
+    # 'old' hashes don't match what is stored, so nothing was refreshed except where the stored hash matches
+    bodies = {x["name"]: x["body"] for x in client.get("/api/extensions").json() if x["builtin"]}
+    assert bodies["todo-rules"] == "mine"
+
+    with db.connect() as conn:
+        conn.execute("UPDATE meta SET value = ? WHERE key = 'seeded_skill:approval-rules'", (db._text_hash("", ""),))
+        db._seed_default_skills(conn)
+    bodies = {x["name"]: x["body"] for x in client.get("/api/extensions").json() if x["builtin"]}
+    assert bodies["approval-rules"] == dict((n, b) for n, _, b in DEFAULT_SKILLS)["approval-rules"]
+    assert bodies["todo-rules"] == "mine"
+
+
+def test_agent_handles_mail_through_mcp(client, tmp_path, monkeypatch):
+    import imaplib
+
+    from app import mail
+
+    _seed_mail(tmp_path)
+    agent = client.post("/api/agents", json={"name": "비서", "cli": "shell", "cwd": str(tmp_path)}).json()
+    call = lambda name, args=None: rpc(client, agent["id"], "tools/call", {"name": name, "arguments": args or {}})["result"]
+    text = lambda r: json.loads(r["content"][0]["text"])
+
+    assert text(call("list_mail_accounts"))[0]["email"] == "me@naver.com"
+    assert text(call("list_mails"))[0]["subject"] == "견적 문의 / 급함"
+    assert text(call("read_mail", {"id": "m1"}))["body"] == "원문 내용"
+    assert client.get("/api/mail/messages").json()[0]["read_at"] is None  # an agent reading it doesn't mark it read
+
+    def refuse(*a):
+        raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+
+    monkeypatch.setattr(mail, "_imap", refuse)
+    res = call("add_mail_account", {"label": "회사", "email": "me@gmail.com", "password": "x", "provider": "gmail"})
+    assert res["isError"] and "앱 비밀번호" in text(res)["error"]
+
+    call("delete_mail_account", {"id": "acc1"})
+    assert text(call("list_mail_accounts")) == []
+
+
+class FakeImap:
+    """Naver-like mailbox: no special-use flags, no MOVE. Records every command."""
+
+    capabilities = ("IMAP4REV1", "UIDPLUS")
+
+    def __init__(self, sent, mails=None):
+        self.sent, self.mails, self.literal = sent, mails or {}, None
+
+    def list(self):
+        from app.mailbox import utf7_encode
+
+        names = ["INBOX", "스팸메일함", "휴지통", "임시보관함", "거래처"]
+        return "OK", [rf'(\HasNoChildren) "/" "{utf7_encode(n)}"'.encode() for n in names]
+
+    def select(self, box, readonly=False):
+        self.sent.append(("select", box))
+        return "OK", [b"1"]
+
+    def status(self, box, what):
+        return "OK", [box.encode() + b" (MESSAGES 3 UNSEEN 1)"]
+
+    def uid(self, command, *args):
+        self.sent.append((command.upper(), *args))
+        if command.upper() == "SEARCH":
+            return "OK", [" ".join(map(str, self.mails)).encode()]
+        if command.upper() == "FETCH":
+            if "RFC822" in args[1] or "BODY.PEEK[]" in args[1] or "HEADER" in args[1]:
+                return "OK", [(f"{u} (UID {u} FLAGS ({flags}) BODY[] {{1}}".encode(), raw) for u, (flags, raw) in self.mails.items()
+                              if str(u) in args[0].split(",")]
+            return "OK", [f"{u} (UID {u} FLAGS ({flags}))".encode() for u, (flags, _) in self.mails.items() if str(u) in args[0].split(",")]
+        return "OK", [b""]
+
+    def append(self, box, flags, date, msg):
+        self.sent.append(("APPEND", box, flags))
+        return "OK", [b""]
+
+    def create(self, box):
+        self.sent.append(("CREATE", box))
+        return "OK", [b""]
+
+    def expunge(self):
+        self.sent.append(("EXPUNGE",))
+
+    def logout(self):
+        pass
+
+
+RAW = b"From: Kim <kim@a.com>\r\nTo: me@naver.com\r\nSubject: =?utf-8?b?6rKs7KCB?=\r\nDate: Wed, 25 Nov 2026 09:23:00 +0900\r\n\r\nhello"
+
+
+def test_agent_works_the_whole_mailbox(client, tmp_path, monkeypatch):
+    from app import mail, mailbox
+
+    _seed_mail(tmp_path)
+    sent = []
+    monkeypatch.setattr(mail, "_imap", lambda *a: FakeImap(sent, {1: ("", RAW), 7: (r"\Seen \Flagged", RAW)}))
+    monkeypatch.setattr(mail.keyring, "get_password", lambda *a: "pw")
+    agent = client.post("/api/agents", json={"name": "비서", "cli": "shell", "cwd": str(tmp_path)}).json()
+
+    def call(name, args):
+        res = rpc(client, agent["id"], "tools/call", {"name": name, "arguments": args})["result"]
+        assert not res.get("isError"), res
+        return json.loads(res["content"][0]["text"])
+
+    folders = {f["name"]: f for f in call("list_mail_folders", {"account_id": "acc1"})}
+    assert folders["스팸메일함"]["role"] == "spam" and folders["휴지통"]["role"] == "trash" and folders["임시보관함"]["role"] == "drafts"
+    assert folders["거래처"]["unread"] == 1
+
+    found = call("search_mailbox", {"account_id": "acc1", "folder": "거래처", "subject": "견적", "unread": False})
+    assert [m["uid"] for m in found] == [7, 1] and found[0]["flags"] == ["read", "flagged"] and found[0]["subject"] == "견적"
+    assert any(c[:3] == ("SEARCH", "CHARSET", "UTF-8") and c[-1] == "SUBJECT" for c in sent)  # Korean goes as a literal
+
+    assert call("read_mailbox_mail", {"account_id": "acc1", "folder": "거래처", "uid": 7})["body"] == "hello"
+
+    call("set_mail_flags", {"id": "m1", "add": ["read", "flagged"]})
+    assert ("STORE", "1", "+FLAGS.SILENT", r"(\Seen \Flagged)") in sent
+    assert client.get("/api/mail/messages").json()[0]["read_at"] is not None
+
+    call("create_mail_folder", {"account_id": "acc1", "name": "광고"})
+    assert ("CREATE", '"' + mailbox.utf7_encode("광고") + '"') in sent
+    call("save_mail_draft", {"account_id": "acc1", "to": "kim@a.com", "subject": "답", "body": "초안"})
+    assert sent[-1][0] == "APPEND" and sent[-1][1] == '"' + mailbox.utf7_encode("임시보관함") + '"'
+
+    call("move_mail", {"account_id": "acc1", "folder": "거래처", "uids": [1, 7], "to": "spam"})
+    assert ("COPY", "1,7", '"' + mailbox.utf7_encode("스팸메일함") + '"') in sent and ("EXPUNGE", "1,7") in sent
+
+    assert call("delete_mail", {"id": "m1"})["to"] == "휴지통"
+    assert client.get("/api/mail/messages").json() == []  # gone from the app's list too
+
+
+def test_sync_brings_read_state_from_the_mailbox(client, tmp_path, monkeypatch):
+    from app import db, mail
+
+    _seed_mail(tmp_path)  # m1 = uid 1, unread in the app
+    mails = {1: (r"\Seen", RAW), 2: (r"\Seen", RAW), 3: ("", RAW)}
+    monkeypatch.setattr(mail, "_imap", lambda *a: FakeImap([], mails))
+    with db.connect() as c:
+        c.execute("UPDATE mail_accounts SET last_uid = 1")
+        account = dict(c.execute("SELECT * FROM mail_accounts").fetchone())
+    monkeypatch.setattr(mail.keyring, "get_password", lambda *a: "pw")
+
+    mail._fetch_new(account)
+    read = {m["subject"] if m["id"] == "m1" else m["id"]: m["read_at"] for m in client.get("/api/mail/messages").json()}
+    assert read["견적 문의 / 급함"] is not None  # read on the phone -> read here
+    assert sorted(v is None for k, v in read.items() if k != "견적 문의 / 급함") == [False, True]  # new: uid 2 read, uid 3 not
+
+    del mails[1]  # moved away in the webmail
+    mails[3] = (r"\Seen", RAW)
+    with db.connect() as c:
+        account = dict(c.execute("SELECT * FROM mail_accounts").fetchone())
+    mail._fetch_new(account)
+    listed = client.get("/api/mail/messages").json()
+    assert len(listed) == 2 and all(m["read_at"] for m in listed)

@@ -199,21 +199,47 @@ def _fetch_new(account: dict) -> None:
         last = account["last_uid"]
         new = uids[-FIRST_SYNC_COUNT:] if last is None else [u for u in uids if u > last]
         for uid in new:
-            _, parts = conn.uid("fetch", str(uid), "(RFC822)")
-            raw = next(p[1] for p in parts if isinstance(p, tuple))
+            _, parts = conn.uid("fetch", str(uid), "(FLAGS RFC822)")
+            head, raw = next(p for p in parts if isinstance(p, tuple))
             mail = parse_message(raw)
             with db.connect() as c:
                 c.execute(
-                    "INSERT OR IGNORE INTO mails (id, account_id, uid, message_id, sender, subject, received_at, body, body_html) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO mails (id, account_id, uid, message_id, sender, subject, received_at, body, body_html, read_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (db.new_id(), account["id"], uid, mail["message_id"], mail["sender"], mail["subject"],
-                     mail["received_at"], mail["body"], mail["html"]),
+                     mail["received_at"], mail["body"], mail["html"], db.now() if rb"\Seen" in head else None),
                 )
         if uids:
             with db.connect() as c:
                 c.execute("UPDATE mail_accounts SET last_uid = ? WHERE id = ?", (max(uids), account["id"]))
+        _refresh_known(conn, account["id"], set(uids))
     finally:
         conn.logout()
+
+
+def _refresh_known(conn, account_id: str, on_server: set[int]) -> None:
+    """Mails already in the app follow the mailbox: read or unread as set there (phone, webmail, agents), and gone
+    from the list once moved or deleted there."""
+    with db.connect() as c:
+        known = {r["uid"]: r["read_at"] for r in c.execute("SELECT uid, read_at FROM mails WHERE account_id = ?", (account_id,))}
+    if not known:
+        return
+    gone = [u for u in known if u not in on_server]
+    seen: set[int] = set()
+    present = ",".join(str(u) for u in known if u in on_server)
+    parts = conn.uid("fetch", present, "(UID FLAGS)")[1] if present else []
+    for part in parts or []:
+        line = part[0] if isinstance(part, tuple) else part
+        m = re.search(rb"UID (\d+)", line or b"")
+        if m and rb"\Seen" in line:
+            seen.add(int(m[1]))
+    with db.connect() as c:
+        for uid, read_at in known.items():
+            if uid in gone:
+                c.execute("DELETE FROM mails WHERE account_id = ? AND uid = ?", (account_id, uid))
+            elif (uid in seen) != (read_at is not None):
+                c.execute("UPDATE mails SET read_at = ? WHERE account_id = ? AND uid = ?",
+                          (db.now() if uid in seen else None, account_id, uid))
 
 
 def _summarize_pending() -> None:
@@ -330,10 +356,23 @@ def list_mails(limit: int = 30) -> list[dict]:
 
 @router.get("/messages/{mail_id}")
 def open_mail(mail_id: str) -> dict:
-    """The detail view: also marks the mail as read (shown in gray in the list)."""
+    """The detail view: also marks the mail as read (shown in gray in the list), in the mailbox too so the phone
+    and webmail agree (in the background: the view must not wait on the mail server)."""
     with db.connect() as conn:
-        conn.execute("UPDATE mails SET read_at = ? WHERE id = ? AND read_at IS NULL", (db.now(), mail_id))
+        changed = conn.execute("UPDATE mails SET read_at = ? WHERE id = ? AND read_at IS NULL", (db.now(), mail_id)).rowcount
+    if changed:
+        threading.Thread(target=_mark_seen_on_server, args=(mail_id,), daemon=True).start()
     return get_mail(mail_id)
+
+
+def _mark_seen_on_server(mail_id: str) -> None:
+    from . import mailbox  # mailbox imports this module
+
+    try:
+        account_id, uid = mailbox.app_mail(mail_id)
+        mailbox.set_flags(account_id, "INBOX", [uid], add=["read"])
+    except Exception:  # noqa: BLE001 - offline: the next sync brings the server's state back
+        pass
 
 
 def get_mail(mail_id: str) -> dict:
@@ -412,7 +451,7 @@ def _send(row: dict, password: str, msg: EmailMessage) -> None:
 
 @router.post("/messages/{mail_id}/reply")
 def send_reply(mail_id: str, reply: Reply) -> dict:
-    """Sends only because the user pressed the send button; nothing else calls this."""
+    """Sent by the send button, or by an agent's MCP tool (mail-rules: only when the user said so)."""
     row, password = _load_for_sending(mail_id)
     msg = EmailMessage()
     msg["From"] = row["email"]
@@ -468,7 +507,7 @@ def build_forward(row: dict, body: Forward) -> EmailMessage:
 
 @router.post("/messages/{mail_id}/forward")
 def forward(mail_id: str, body: Forward) -> dict:
-    """Sends only because the user pressed the send button; nothing else calls this."""
+    """Sent by the send button, or by an agent's MCP tool (mail-rules: only when the user said so)."""
     forward_recipients(body.to)  # a typo in the address is reported before anything else
     row, password = _load_for_sending(mail_id)
     if row.get("body_html") is None:

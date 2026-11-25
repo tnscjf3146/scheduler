@@ -53,6 +53,18 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
         e.preventDefault()
         return false
       }
+      // Ctrl+V: leave it to the browser's own paste (xterm hears the paste event), instead of sending ^V.
+      if (e.ctrlKey && !e.altKey && e.code === 'KeyV') return false
+      // Shift+Enter: a new line in the prompt instead of sending it. Claude Code takes ESC+Enter as that.
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === 'Enter') {
+        // Korean IME: the syllable being typed is committed around this key, and xterm sends it a moment later
+        // (in a timeout of its own). Send the new line after that, or the syllable lands on the new line.
+        const newline = () => setTimeout(() => send({ type: 'input', data: '\x1b\r' }), 30)
+        if (e.type === 'keydown' && e.isComposing) term.textarea?.addEventListener('compositionend', newline, { once: true })
+        else if (e.type === 'keydown') newline()
+        e.preventDefault()
+        return false
+      }
       return true
     })
 

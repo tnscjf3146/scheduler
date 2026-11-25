@@ -52,7 +52,8 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
     if agent["cli"] == "claude":
         # Identity, skills and harness, as a plugin (see extensions.py). Nothing goes into the work folder.
         plugin = extensions.build_plugin(agent)
-        args = f"--mcp-config {_ps_quote(str(mcp_json))} --plugin-dir {_ps_quote(str(plugin))}"
+        # --chrome: Claude in Chrome, the user's own Chrome (already signed in to their sites), for browser-rules.
+        args = f"--chrome --mcp-config {_ps_quote(str(mcp_json))} --plugin-dir {_ps_quote(str(plugin))}"
         start = f"claude {args}"
         if not is_fresh and _has_claude_history(agent["cwd"]):
             # A saved file is no promise --continue accepts it (e.g. a conversation Claude Code ran as a background

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -122,7 +123,7 @@ CREATE TABLE IF NOT EXISTS mails (
     reply_draft TEXT,
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | ready | failed
     sent_at TEXT,
-    read_at TEXT,                        -- first opened in the app (local only; the mailbox is opened read-only)
+    read_at TEXT,                        -- read: follows the mailbox's Seen flag (mail.py _refresh_known)
     UNIQUE (account_id, uid)
 );
 """
@@ -167,7 +168,9 @@ def _seed_default_skills(conn) -> None:
 
     for name, description, body in DEFAULT_SKILLS:
         key = f"seeded_skill:{name}"
-        if conn.execute("SELECT 1 FROM meta WHERE key = ?", (key,)).fetchone():
+        seeded = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        if seeded:
+            _refresh_default_skill(conn, key, seeded["value"], name, description, body)
             continue
         row = conn.execute("SELECT id FROM extensions WHERE kind = 'skill' AND name = ?", (name,)).fetchone()
         old = name == "skill-writing-rules" and conn.execute("SELECT 1 FROM meta WHERE key = 'seeded_skill_rules'").fetchone()
@@ -187,7 +190,26 @@ def _seed_default_skills(conn) -> None:
                 ids = json.loads(a["extensions"])
                 if ext_id not in ids:
                     conn.execute("UPDATE agents SET extensions = ? WHERE id = ?", (json.dumps(ids + [ext_id]), a["id"]))
-        conn.execute("INSERT INTO meta (key, value) VALUES (?, '1')", (key,))
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (key, _text_hash(description, body)))
+
+
+# Default skill texts from before the hash was stored in meta (value '1'), so those copies can be told apart from edits.
+_LEGACY_SKILL_HASHES = {"307481081766", "c574e59127ac", "e75960a85b81", "3011e98efb92"}
+
+
+def _text_hash(description: str, body: str) -> str:
+    return hashlib.sha1((description + body).encode()).hexdigest()[:12]
+
+
+def _refresh_default_skill(conn, key: str, seeded: str, name: str, description: str, body: str) -> None:
+    """Brings a default skill up to the app's current text, unless the user edited it since it was put in."""
+    new = _text_hash(description, body)
+    if seeded == new:
+        return
+    row = conn.execute("SELECT id, description, body FROM extensions WHERE kind = 'skill' AND builtin = 1 AND name = ?", (name,)).fetchone()
+    if row and _text_hash(row["description"], row["body"]) in {seeded, *(_LEGACY_SKILL_HASHES if seeded == "1" else ())}:
+        conn.execute("UPDATE extensions SET description = ?, body = ? WHERE id = ?", (description, body, row["id"]))
+        conn.execute("UPDATE meta SET value = ? WHERE key = ?", (new, key))
 
 
 DEFAULT_FORMS = [
