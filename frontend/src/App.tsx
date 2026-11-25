@@ -67,7 +67,7 @@ export default function App() {
         </div>
         <div className="flex min-w-0 min-h-0 flex-[32] flex-col gap-4">
           <MailReview agents={agents} onOpenAgent={setSelected} />
-          <Approvals />
+          <Approvals agents={agents} onOpenAgent={setSelected} />
         </div>
         <TerminalPanel key={restarts} agent={agent} onStatus={loadAgents} />
       </main>

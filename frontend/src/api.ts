@@ -19,6 +19,15 @@ export type Approval = {
   reason: string | null
   created_at: string
   decided_at: string | null
+  kind: 'approval' | 'report'
+  form_name: string
+  fields: { label: string; value: string; long: boolean }[]
+}
+export type DocForm = {
+  id: string
+  name: string
+  kind: 'approval' | 'report'
+  fields: { label: string; long: boolean }[]
 }
 export type MailItem = {
   id: string

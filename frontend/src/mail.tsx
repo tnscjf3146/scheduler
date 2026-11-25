@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, formatWhen, type Agent, type Mail, type MailAccount, type MailItem } from './api'
 import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
-import { CLI_LABEL, STATUS_LABEL } from './agents'
+import { AgentPicker, canReceive } from './agents'
 
 const senderName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim() || s
 
@@ -199,7 +199,7 @@ function HandToAgent({
   onClose: () => void
   onDone: (agentId: string) => void
 }) {
-  const canReceive = (a: Agent) => a.cli !== 'shell' // a plain shell would run the request as a command
+
   const [agentId, setAgentId] = useState(agents.find(canReceive)?.id ?? '')
   const [instruction, setInstruction] = useState('')
   const [sending, setSending] = useState(false)
@@ -239,34 +239,7 @@ function HandToAgent({
       <div className="flex min-h-0 flex-1 gap-5">
         <div className="flex w-[38%] min-w-0 flex-col gap-2">
           <span className="text-xs font-medium text-neutral-500">받을 에이전트</span>
-          {agents.length === 0 ? (
-            <p className="text-[13px] text-neutral-500">에이전트가 없습니다. Agent 위젯에서 Claude Code나 Codex 에이전트를 먼저 추가하세요.</p>
-          ) : (
-            <div className="scroll-hover flex min-h-0 flex-col overflow-hidden rounded-lg border border-neutral-200">
-              {agents.map((a) => {
-                const ok = canReceive(a)
-                const on = a.id === agentId
-                return (
-                  <button
-                    key={a.id}
-                    disabled={!ok}
-                    onClick={() => setAgentId(a.id)}
-                    className={`flex items-center gap-3 border-b border-neutral-200 px-3.5 py-2.5 text-left last:border-b-0 disabled:opacity-40 ${on ? 'bg-neutral-100 shadow-[inset_3px_0_0_#262626]' : 'bg-white hover:bg-neutral-50'}`}
-                  >
-                    <span className={`flex size-8 shrink-0 items-center justify-center rounded-full text-[13px] font-bold ${on ? 'bg-neutral-700 text-white' : 'bg-neutral-200 text-neutral-600'}`}>
-                      {a.name.slice(0, 1)}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium">{a.name}</span>
-                      <span className="block truncate text-[11px] text-neutral-500">
-                        {ok ? `${CLI_LABEL[a.cli]} · ${STATUS_LABEL[a.status]}` : 'PowerShell · 메일을 넘길 수 없음'}
-                      </span>
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
+          <AgentPicker agents={agents} value={agentId} onChange={setAgentId} />
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-2">

@@ -178,6 +178,26 @@ def get_or_start(agent: dict, base_url: str, cols: int, rows: int) -> Session:
         return session
 
 
+def type_to_agent(agent_id: str, line: str, base_url: str) -> bool:
+    """Types one request line into the agent's CLI, starting its terminal if needed. Returns whether it was started.
+    The line goes in once the CLI is ready (and the user answered a "trust this folder?" question)."""
+    from fastapi import HTTPException
+
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "에이전트가 없습니다")
+    agent = dict(row)
+    if agent["cli"] == "shell":  # a plain shell would run the line as a command
+        raise HTTPException(400, "PowerShell 에이전트에는 넘길 수 없습니다. Claude Code나 Codex 에이전트를 고르세요")
+    was_running = status(agent_id) == "running"
+    session = get_or_start(agent, base_url, 100, 30)
+    if was_running and session.at_shell_prompt():
+        raise HTTPException(409, "에이전트의 CLI가 꺼져 있습니다. 에이전트 메뉴에서 재시작한 뒤 다시 보내세요")
+    threading.Thread(target=session.type_when_ready, args=(line,), daemon=True).start()
+    return not was_running
+
+
 def status(agent_id: str) -> str:
     session = _sessions.get(agent_id)
     if session is None:

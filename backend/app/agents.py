@@ -39,8 +39,10 @@ AGENTS_MD = """# {name}
 
 - 결재가 필요한 일: 밖으로 나가는 것(클라이언트에게 보낼 내용, 제출물 확정), 되돌리기 어려운 것, 방향을 정하는 것.
 - 결재가 필요 없는 일: 명령 실행 허락. 그건 CLI가 따로 묻는다.
-- `submit_approval`: `title`(제목), `decision`(사용자가 승인/반려할 질문), `background`(지금까지 한 일), `attachments`(파일 경로 목록).
-- `get_approval`: 받은 `id`로 결과를 확인한다. `pending`이면 아직 대기, `approved`면 진행, `rejected`면 `reason`을 읽고 고친다.
+- 사용자가 만든 양식(결재서, 보고서 등)에 맞춰 쓴다. `list_forms`로 양식 이름과 칸을 확인한다.
+- `submit_approval`: `title`(제목), `form`(양식 이름), `fields`(칸 이름별 내용 `{{"배경": "...", ...}}`), `attachments`(파일 경로 목록).
+- 한 일을 알릴 때는 보고 양식(`kind`가 `report`)으로 올린다.
+- `get_approval`: 받은 `id`로 결과를 확인한다. `pending`이면 아직 대기, `approved`면 진행(보고는 확인함), `rejected`면 `reason`을 읽고 고친다(보고는 보완 요청).
 - 결과는 자동으로 오지 않는다. 사용자가 "결재 확인해"라고 하거나 다음 단계로 넘어가기 전에 직접 확인한다.
 
 ## 할 일 · 달력

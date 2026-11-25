@@ -10,6 +10,38 @@ declare global {
 }
 
 export const CLI_LABEL: Record<Agent['cli'], string> = { claude: 'Claude Code', codex: 'Codex', shell: 'PowerShell' }
+
+/** Agents a request can be typed to: a plain shell would run the line as a command. */
+export const canReceive = (a: Agent) => a.cli !== 'shell'
+
+/** Pick one agent to hand something to (a mail, a document request). */
+export function AgentPicker({ agents, value, onChange }: { agents: Agent[]; value: string; onChange: (id: string) => void }) {
+  if (agents.length === 0) return <p className="text-[13px] text-neutral-500">에이전트가 없습니다. Agent 위젯에서 Claude Code나 Codex 에이전트를 먼저 추가하세요.</p>
+  return (
+    <div className="scroll-hover flex min-h-0 flex-col overflow-hidden rounded-lg border border-neutral-200">
+      {agents.map((a) => {
+        const ok = canReceive(a)
+        const on = a.id === value
+        return (
+          <button
+            key={a.id}
+            disabled={!ok}
+            onClick={() => onChange(a.id)}
+            className={`flex items-center gap-3 border-b border-neutral-200 px-3.5 py-2.5 text-left last:border-b-0 disabled:opacity-40 ${on ? 'bg-neutral-100 shadow-[inset_3px_0_0_#262626]' : 'bg-white hover:bg-neutral-50'}`}
+          >
+            <span className={`flex size-8 shrink-0 items-center justify-center rounded-full text-[13px] font-bold ${on ? 'bg-neutral-700 text-white' : 'bg-neutral-200 text-neutral-600'}`}>
+              {a.name.slice(0, 1)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium">{a.name}</span>
+              <span className="block truncate text-[11px] text-neutral-500">{ok ? `${CLI_LABEL[a.cli]} · ${STATUS_LABEL[a.status]}` : 'PowerShell · 넘길 수 없음'}</span>
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 export const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
 
 export function Agents({

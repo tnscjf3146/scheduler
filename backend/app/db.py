@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import uuid
@@ -62,7 +63,19 @@ CREATE TABLE IF NOT EXISTS approvals (
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected
     reason TEXT,
     created_at TEXT NOT NULL,
-    decided_at TEXT
+    decided_at TEXT,
+    kind TEXT NOT NULL DEFAULT 'approval',    -- approval (결재) | report (보고)
+    form_name TEXT NOT NULL DEFAULT '결재서',
+    fields TEXT NOT NULL DEFAULT '[]'         -- [{"label", "value", "long"}], filled from the form
+);
+
+-- Document forms (결재서, 보고서, ...) the user edits; agents fill them in through submit_approval.
+CREATE TABLE IF NOT EXISTS forms (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'approval',   -- approval | report
+    fields TEXT NOT NULL DEFAULT '[]',       -- [{"label", "long"}]; long = a tall box
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS mail_accounts (
@@ -111,6 +124,22 @@ def init() -> None:
         for col in ("body_html", "read_at"):
             if col not in mail_cols:
                 conn.execute(f"ALTER TABLE mails ADD COLUMN {col} TEXT")
+        approval_cols = {r["name"] for r in conn.execute("PRAGMA table_info(approvals)")}
+        for col, ddl in (("kind", "TEXT NOT NULL DEFAULT 'approval'"), ("form_name", "TEXT NOT NULL DEFAULT '결재서'"),
+                         ("fields", "TEXT NOT NULL DEFAULT '[]'")):
+            if col not in approval_cols:
+                conn.execute(f"ALTER TABLE approvals ADD COLUMN {col} {ddl}")
+        if not conn.execute("SELECT 1 FROM forms").fetchone():  # starter forms; the user can change or delete them
+            for name, kind, labels in DEFAULT_FORMS:
+                fields = [{"label": l, "long": True} for l in labels]
+                conn.execute("INSERT INTO forms (id, name, kind, fields, created_at) VALUES (?, ?, ?, ?, ?)",
+                             (new_id(), name, kind, json.dumps(fields, ensure_ascii=False), now()))
+
+
+DEFAULT_FORMS = [
+    ("결재서", "approval", ["배경", "결정 사항"]),
+    ("보고서", "report", ["개요", "진행 내용", "결과", "다음 할 일"]),
+]
 
 
 def rows(cursor) -> list[dict]:

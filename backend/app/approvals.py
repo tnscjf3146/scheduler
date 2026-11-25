@@ -1,4 +1,5 @@
-"""Approval documents. Agents submit them through a small MCP endpoint (/mcp/{agent_id}); I decide in the UI."""
+"""Documents agents put in front of me: approvals (결재) and reports (보고), each filled into a form I define.
+Agents submit them through a small MCP endpoint (/mcp/{agent_id}); I decide in the UI."""
 
 import json
 
@@ -6,16 +7,20 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from . import db, todos
+from . import db, sessions, todos
 
 router = APIRouter(tags=["approvals"])
+
+
+def _doc(row) -> dict:
+    return {**dict(row), "attachments": json.loads(row["attachments"]), "fields": json.loads(row["fields"])}
 
 
 def _get(conn, approval_id: str) -> dict:
     row = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
     if not row:
         raise HTTPException(404, "결재 문서가 없습니다")
-    return {**dict(row), "attachments": json.loads(row["attachments"])}
+    return _doc(row)
 
 
 @router.get("/api/approvals")
@@ -25,7 +30,7 @@ def list_approvals(status: str | None = None) -> list[dict]:
             cur = conn.execute("SELECT * FROM approvals WHERE status = ? ORDER BY created_at DESC", (status,))
         else:
             cur = conn.execute("SELECT * FROM approvals ORDER BY created_at DESC")
-        return [{**a, "attachments": json.loads(a["attachments"])} for a in db.rows(cur)]
+        return [_doc(r) for r in cur.fetchall()]
 
 
 @router.get("/api/approvals/{approval_id}")
@@ -54,29 +59,122 @@ def decide(approval_id: str, body: Decision) -> dict:
         return _get(conn, approval_id)
 
 
+# ---- Forms -------------------------------------------------------------------------------------
+
+KIND_LABEL = {"approval": "결재", "report": "보고"}
+
+
+class FormField(BaseModel):
+    label: str = Field(min_length=1, max_length=20)
+    long: bool = True
+
+
+class FormIn(BaseModel):
+    name: str = Field(min_length=1, max_length=20)
+    kind: str = Field(pattern="^(approval|report)$")
+    fields: list[FormField] = Field(min_length=1, max_length=12)
+
+
+def _form(row) -> dict:
+    return {**dict(row), "fields": json.loads(row["fields"])}
+
+
+@router.get("/api/forms")
+def list_forms() -> list[dict]:
+    with db.connect() as conn:
+        return [_form(r) for r in conn.execute("SELECT * FROM forms ORDER BY created_at, name")]
+
+
+def _save_form(conn, form_id: str, body: FormIn) -> dict:
+    labels = [f.label.strip() for f in body.fields]
+    if len(set(labels)) != len(labels) or not all(labels):
+        raise HTTPException(400, "칸 이름이 비었거나 겹칩니다")
+    if conn.execute("SELECT 1 FROM forms WHERE name = ? AND id != ?", (body.name.strip(), form_id)).fetchone():
+        raise HTTPException(409, "같은 이름의 양식이 있습니다")
+    fields = json.dumps([{"label": l, "long": f.long} for l, f in zip(labels, body.fields)], ensure_ascii=False)
+    conn.execute(
+        "INSERT INTO forms (id, name, kind, fields, created_at) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind, fields = excluded.fields",
+        (form_id, body.name.strip(), body.kind, fields, db.now()),
+    )
+    return _form(conn.execute("SELECT * FROM forms WHERE id = ?", (form_id,)).fetchone())
+
+
+@router.post("/api/forms")
+def create_form(body: FormIn) -> dict:
+    with db.connect() as conn:
+        return _save_form(conn, db.new_id(), body)
+
+
+@router.put("/api/forms/{form_id}")
+def update_form(form_id: str, body: FormIn) -> dict:
+    """Documents already submitted keep the fields they were written with."""
+    with db.connect() as conn:
+        if not conn.execute("SELECT 1 FROM forms WHERE id = ?", (form_id,)).fetchone():
+            raise HTTPException(404, "양식이 없습니다")
+        return _save_form(conn, form_id, body)
+
+
+@router.delete("/api/forms/{form_id}")
+def delete_form(form_id: str) -> None:
+    with db.connect() as conn:
+        conn.execute("DELETE FROM forms WHERE id = ?", (form_id,))
+
+
+class FormRequest(BaseModel):
+    agent_id: str
+    instruction: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/api/forms/{form_id}/request")
+def request_document(form_id: str, body: FormRequest, request: Request) -> dict:
+    """Asks an agent, in its terminal, to write a document in this form and submit it."""
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM forms WHERE id = ?", (form_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "양식이 없습니다")
+    form = _form(row)
+    labels = ", ".join(f["label"] for f in form["fields"])
+    line = (f"'{form['name']}' 양식({KIND_LABEL[form['kind']]})으로 문서를 써서 scheduler MCP의 submit_approval 도구로 올려 주세요. "
+            f"form은 '{form['name']}', fields에는 {labels} 칸을 모두 채워 주세요. 요청: {' '.join(body.instruction.split())}")
+    return {"started": sessions.type_to_agent(body.agent_id, line, str(request.base_url).rstrip("/"))}
+
+
 # ---- MCP (Streamable HTTP, JSON responses only) -------------------------------------------------
 
 TOOLS = [
     {
+        "name": "list_forms",
+        "description": "사용자가 만든 문서 양식(결재서, 보고서 등)과 각 양식의 칸 이름을 본다. kind: approval(결재) | report(보고).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "submit_approval",
         "description": (
-            "사용자가 정해야 하는 사항을 결재 문서로 올린다. 예: 클라이언트에게 제출할 결과물 확정, 클라이언트에게 알릴 내용. "
-            "명령 실행 허락에는 쓰지 않는다. 반환된 id로 get_approval을 불러 결과(승인/반려와 사유)를 확인한다."
+            "사용자에게 문서를 올린다. 결재(사용자가 정해야 하는 것: 클라이언트에게 낼 결과물 확정, 알릴 내용 등)와 "
+            "보고(한 일 알리기) 모두 이 도구로 올린다. form에 양식 이름을, fields에 그 양식의 칸 이름별 내용을 넣는다. "
+            "양식과 칸은 list_forms로 확인한다. form을 생략하면 '결재서' 양식으로 background/decision을 쓴다. "
+            "명령 실행 허락에는 쓰지 않는다. 반환된 id로 get_approval을 불러 결과를 확인한다."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "결재 문서 제목"},
-                "background": {"type": "string", "description": "배경: 지금까지 한 일과 상황"},
-                "decision": {"type": "string", "description": "결정할 사항: 사용자가 승인/반려할 질문"},
+                "title": {"type": "string", "description": "문서 제목"},
+                "form": {"type": "string", "description": "양식 이름 (예: 결재서, 보고서)"},
+                "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "양식의 칸 이름 -> 내용"},
+                "background": {"type": "string", "description": "form 생략 시: 배경, 지금까지 한 일과 상황"},
+                "decision": {"type": "string", "description": "form 생략 시: 사용자가 승인/반려할 질문"},
                 "attachments": {"type": "array", "items": {"type": "string"}, "description": "첨부 파일 경로"},
             },
-            "required": ["title", "decision"],
+            "required": ["title"],
         },
     },
     {
         "name": "get_approval",
-        "description": "올린 결재 문서의 상태를 확인한다. status: pending(대기) | approved(승인) | rejected(반려, reason에 사유).",
+        "description": (
+            "올린 문서의 상태를 확인한다. status: pending(대기) | approved(결재는 승인, 보고는 확인함) | "
+            "rejected(결재는 반려, 보고는 보완 요청). reason에 사용자의 의견이나 사유가 있다."
+        ),
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
     },
     {
@@ -165,15 +263,34 @@ def _call_tool(agent: dict, name: str, args: dict) -> dict:
     if result is not None:
         return _text(result)
     with db.connect() as conn:
+        if name == "list_forms":
+            return _text([{"name": f["name"], "kind": f["kind"], "fields": [x["label"] for x in f["fields"]]} for f in list_forms()])
         if name == "submit_approval":
+            if args.get("form"):
+                row = conn.execute("SELECT * FROM forms WHERE name = ?", (str(args["form"]).strip(),)).fetchone()
+                if not row:
+                    names = [r["name"] for r in conn.execute("SELECT name FROM forms")]
+                    return {**_text({"error": f"양식이 없습니다: {args['form']}", "forms": names}), "isError": True}
+                form = _form(row)
+                values = {str(k).strip(): str(v) for k, v in (args.get("fields") or {}).items()}
+                unknown = set(values) - {f["label"] for f in form["fields"]}
+                if unknown:
+                    return {**_text({"error": f"양식에 없는 칸: {sorted(unknown)}", "fields": [f["label"] for f in form["fields"]]}), "isError": True}
+                kind, form_name = form["kind"], form["name"]
+                fields = [{**f, "value": values.get(f["label"], "")} for f in form["fields"]]
+            else:
+                kind, form_name = "approval", "결재서"
+                fields = [{"label": "배경", "value": str(args.get("background", "")), "long": True},
+                          {"label": "결정 사항", "value": str(args["decision"]), "long": True}]
             approval_id = db.new_id()
             conn.execute(
-                "INSERT INTO approvals (id, agent_id, agent_name, title, background, decision, attachments, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO approvals (id, agent_id, agent_name, title, background, decision, attachments, created_at, "
+                "kind, form_name, fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (approval_id, agent["id"], agent["name"], str(args["title"]), str(args.get("background", "")),
-                 str(args["decision"]), json.dumps(list(args.get("attachments") or []), ensure_ascii=False), db.now()),
+                 str(args.get("decision", "")), json.dumps(list(args.get("attachments") or []), ensure_ascii=False), db.now(),
+                 kind, form_name, json.dumps(fields, ensure_ascii=False)),
             )
-            return _text({"id": approval_id, "status": "pending", "message": "결재 대기에 올렸습니다. get_approval로 결과를 확인하세요."})
+            return _text({"id": approval_id, "status": "pending", "message": f"'{form_name}' 문서를 올렸습니다. get_approval로 결과를 확인하세요."})
         if name == "get_approval":
             row = conn.execute(
                 "SELECT id, status, reason, decided_at FROM approvals WHERE id = ? AND agent_id = ?", (args["id"], agent["id"])

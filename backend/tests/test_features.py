@@ -393,3 +393,28 @@ def test_no_typing_into_a_bare_shell(monkeypatch):
     assert s.type_when_ready("hello", timeout=1) is False
     assert typed == []
 
+
+
+
+def test_forms_shape_submitted_documents(client, tmp_path):
+    import json
+
+    agent = client.post("/api/agents", json={"name": "보고 담당", "cli": "shell", "cwd": str(tmp_path)}).json()
+    call = lambda name, **args: rpc(client, agent["id"], "tools/call", {"name": name, "arguments": args})["result"]
+
+    assert {f["name"] for f in json.loads(call("list_forms")["content"][0]["text"])} >= {"결재서", "보고서"}
+    form = client.post("/api/forms", json={"name": "주간 보고", "kind": "report", "fields": [{"label": "이번 주"}, {"label": "이슈", "long": False}]}).json()
+    assert client.post("/api/forms", json={"name": "주간 보고", "kind": "report", "fields": [{"label": "x"}]}).status_code == 409
+
+    assert call("submit_approval", title="t", form="없는 양식").get("isError")
+    assert call("submit_approval", title="t", form="주간 보고", fields={"모르는 칸": "x"}).get("isError")
+    call("submit_approval", title="3주차", form="주간 보고", fields={"이번 주": "로그인 완성"})
+    doc = client.get("/api/approvals", params={"status": "pending"}).json()[0]
+    assert (doc["kind"], doc["form_name"]) == ("report", "주간 보고")
+    assert doc["fields"] == [{"label": "이번 주", "long": True, "value": "로그인 완성"}, {"label": "이슈", "long": False, "value": ""}]
+
+    # editing the form later does not change what was already submitted
+    client.put(f"/api/forms/{form['id']}", json={"name": "주간 보고", "kind": "report", "fields": [{"label": "요약"}]})
+    assert client.get(f"/api/approvals/{doc['id']}").json()["fields"][0]["label"] == "이번 주"
+    # a shell agent cannot be asked to write one (the line would run as a command)
+    assert client.post(f"/api/forms/{form['id']}/request", json={"agent_id": agent["id"], "instruction": "써 줘"}).status_code == 400
