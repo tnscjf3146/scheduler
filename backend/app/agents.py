@@ -62,7 +62,7 @@ AGENTS_MD = """# {name}
 
 사용자가 부탁하면 `scheduler` MCP 서버의 도구로 만든다.
 
-- `create_skill`: 스킬(`name`, 언제 쓰는지 `description`, 내용 `body`)을 앱의 "스킬 & 하네스" 목록에 넣는다.
+- `create_skill`: 스킬(`name`, 언제 쓰는지 `description`, 내용 `body`)을 앱의 "스킬 & 하네스" 목록에 넣는다. 만들기 전에 `list_extensions`로 `skill-writing-rules` 스킬을 읽고 따른다.
 - `create_hook`: 하네스(Claude Code 훅. `name`, 시점 `event`, 대상 도구 `matcher`, 명령 `command`, 설명 `description`)를 넣는다.
 - `list_extensions`: 앱에 있는 스킬과 하네스, 붙은 에이전트를 본다.
 - `create_agent`: 에이전트(`name`, `role`, `persona`, `cli`, `cwd`)를 만든다. 사용자가 만들라고 한 경우에만 쓴다.

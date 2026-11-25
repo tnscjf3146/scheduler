@@ -462,3 +462,24 @@ def test_skills_and_harness_reach_the_agent_as_a_plugin(client, tmp_path, monkey
     client.delete(f"/api/extensions/{hook['id']}")
     assert extensions.build_plugin({**agent, "extensions": json.dumps([skill["id"], hook["id"]])}) is None
     assert not plugin.exists()
+
+
+def test_skill_rules_live_in_a_skill_not_in_code(client, tmp_path):
+    import json
+
+    from app import db
+
+    # the rule is a skill the user can read and edit, put in once
+    rules = [x for x in client.get("/api/extensions").json() if x["name"] == "skill-writing-rules"]
+    assert len(rules) == 1 and "영어로만 이루어진 문장" in rules[0]["body"]
+    client.delete(f"/api/extensions/{rules[0]['id']}")
+    db.init()  # deleted stays deleted
+    assert not [x for x in client.get("/api/extensions").json() if x["name"] == "skill-writing-rules"]
+
+    # the tool points agents at it and does not reject anything itself
+    me = client.post("/api/agents", json={"name": "비서", "cli": "claude", "cwd": str(tmp_path)}).json()
+    tools = {t["name"]: t for t in rpc(client, me["id"], "tools/list")["result"]["tools"]}
+    assert "skill-writing-rules" in tools["create_skill"]["description"]
+    res = rpc(client, me["id"], "tools/call", {"name": "create_skill", "arguments": {
+        "name": "react-rules", "description": "React 컴포넌트를 만들 때", "body": "`useEffect` 대신 이벤트 핸들러를 먼저 쓴다."}})["result"]
+    assert json.loads(res["content"][0]["text"])["name"] == "react-rules"

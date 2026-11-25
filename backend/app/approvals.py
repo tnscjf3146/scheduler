@@ -239,12 +239,13 @@ TOOLS = [
         "name": "create_skill",
         "description": (
             "스킬을 만들어 앱의 '스킬 & 하네스' 목록에 넣는다. 스킬은 Claude Code가 필요할 때 읽는 지시 묶음(SKILL.md)이다. "
+            "만들기 전에 list_extensions로 'skill-writing-rules' 스킬을 읽고 그 규칙(이름, 언어, 설명 쓰는 법)을 따른다. "
             "에이전트에 붙이는 것은 사용자가 화면에서 한다."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "이름 (40자 이내)"},
+                "name": {"type": "string", "description": "이름 (40자 이내). skill-writing-rules를 따른다"},
                 "description": {"type": "string", "description": "언제 쓰는지. Claude가 이 설명을 보고 스킬을 고른다"},
                 "body": {"type": "string", "description": "스킬 내용 (마크다운). 따라야 할 규칙과 절차"},
             },
