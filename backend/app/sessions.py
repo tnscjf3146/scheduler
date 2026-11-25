@@ -63,7 +63,7 @@ class Session:
         script = _launch_script(agent, f"{base_url}/mcp/{agent['id']}")
         self.pty = PtyProcess.spawn(
             ["powershell.exe", "-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-            cwd=agent["cwd"], dimensions=(rows, cols),
+            cwd=agent["cwd"], dimensions=(rows, cols), env=child_env(),
         )
         self.buffer = ""
         self.received = 0  # total characters ever printed (buffer is capped, this is not)
@@ -188,6 +188,14 @@ def status(agent_id: str) -> str:
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def child_env() -> dict[str, str]:
+    """The environment for programs the app starts (agent terminals, the mail summarizer).
+    The packaged exe runs with PyInstaller's own variables (_PYI_*, _MEIPASS2) set. Handed down, they make any
+    PyInstaller program started inside an agent terminal - Scheduler.exe itself included - believe it is already
+    unpacked and look for python313.dll in this app's temp folder, which fails ("Failed to load Python DLL")."""
+    return {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+
+
 def kill_strays(agent_ids: list[str]) -> None:
     """Ends processes whose command line names one of these agents (its folder or MCP config). Claude Code starts
     background helpers (a daemon, forked sessions) outside the terminal's process tree; they keep the agent's folder
@@ -203,7 +211,7 @@ def kill_strays(agent_ids: list[str]) -> None:
     )
     subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        env={**os.environ, "SCHEDULER_AGENT_IDS": ",".join(ids)},  # the ids are not in this command line
+        env={**child_env(), "SCHEDULER_AGENT_IDS": ",".join(ids)},  # the ids are not in this command line
         capture_output=True, timeout=60, creationflags=NO_WINDOW,
     )
 

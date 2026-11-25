@@ -167,6 +167,7 @@ def summarize(mail: dict) -> dict:
              "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch",
              "NotebookEdit", "Task"],
             input=PROMPT.format(**mail), capture_output=True, text=True, encoding="utf-8", timeout=180, cwd=empty,
+            env=sessions.child_env(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     if out.returncode != 0:

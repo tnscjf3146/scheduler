@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -340,6 +341,23 @@ def test_typing_waits_for_trust_question(monkeypatch):
     s._emit("\x1b[2J" + "Welcome to Claude Code " * 20 + "\r\n> ")
     t.join(5)
     assert typed == ["hello"]
+
+
+def test_agent_terminal_does_not_inherit_pyinstaller_variables(client, tmp_path, monkeypatch):
+    from app import sessions
+
+    # As if the app were the packaged exe: these would make Scheduler.exe started inside the terminal fail to start.
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", r"C:\x\Scheduler.exe")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\x\_MEI123")
+    agent = client.post("/api/agents", json={"name": "셸", "cli": "shell", "cwd": str(tmp_path)}).json()
+    with client.websocket_connect(f"/api/agents/{agent['id']}/terminal?cols=120&rows=24") as ws:
+        ws.send_json({"type": "input", "data": 'echo "pyi=[$env:_PYI_ARCHIVE_FILE$env:_PYI_APPLICATION_HOME_DIR]"\r'})
+        printed = re.compile(r"pyi=\[(?!\$)[^\]]*\]")  # the echo's output, not the typed command line
+        seen, deadline = "", time.time() + 20
+        while not printed.search(sessions.ANSI.sub("", seen)) and time.time() < deadline:
+            seen += ws.receive_text()
+    assert printed.search(sessions.ANSI.sub("", seen)).group(0) == "pyi=[]"
+    client.delete(f"/api/agents/{agent['id']}")
 
 
 def test_kill_strays_ends_only_that_agents_processes(tmp_path):
