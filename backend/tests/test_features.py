@@ -689,3 +689,31 @@ def test_unread_filter(client, tmp_path):
     client.get("/api/mail/messages/m1")
     assert client.get("/api/mail/messages", params={"unread": True}).json() == []
     assert [m["id"] for m in client.get("/api/mail/messages").json()] == ["m1"]  # still in "전체"
+
+
+def test_slow_mcp_tool_does_not_stall_the_server(client, tmp_path, monkeypatch):
+    """A mailbox tool can wait on the mail server for a long time. It must run off the async loop, or every
+    terminal connection stalls until it drops ("[연결이 끊겼습니다]")."""
+    import asyncio
+    import time
+
+    import httpx
+
+    from app import approvals
+    from app.main import app
+
+    agent = client.post("/api/agents", json={"name": "a", "cli": "shell", "cwd": str(tmp_path)}).json()
+    monkeypatch.setattr(approvals, "_call_tool", lambda *a: time.sleep(1.5) or {"content": []})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            t0 = time.monotonic()
+            slow = asyncio.create_task(c.post(f"/mcp/{agent['id']}", json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search_mailbox", "arguments": {}}}))
+            await asyncio.sleep(0.2)
+            await c.get("/api/health")
+            answered = time.monotonic() - t0  # counted from the start: a blocked loop delays this coroutine too
+            await slow
+            return answered
+
+    assert asyncio.run(run()) < 1.0  # answered while the 1.5 s tool was still running

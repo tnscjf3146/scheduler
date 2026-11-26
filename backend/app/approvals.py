@@ -4,6 +4,7 @@ Agents submit them through a small MCP endpoint (/mcp/{agent_id}); I decide in t
 import json
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
@@ -654,7 +655,9 @@ async def mcp(agent_id: str, request: Request):
         result = {"tools": TOOLS}
     elif method == "tools/call":
         try:
-            result = _call_tool(dict(row), params["name"], params.get("arguments") or {})
+            # In a worker thread: mailbox tools wait on the mail server (IMAP) for seconds or more, and on this
+            # async loop that would stall every terminal connection until they time out ("[연결이 끊겼습니다]").
+            result = await run_in_threadpool(_call_tool, dict(row), params["name"], params.get("arguments") or {})
         except KeyError as e:
             result = {**_text({"error": f"필수 값이 없습니다: {e}"}), "isError": True}
         except ValidationError as e:
