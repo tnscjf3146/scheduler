@@ -346,11 +346,13 @@ LIST_COLUMNS = "m.id, m.sender, m.subject, m.received_at, m.summary_title, m.sta
 
 
 @router.get("/messages")
-def list_mails(limit: int = 30) -> list[dict]:
+def list_mails(limit: int = 30, unread: bool = False) -> list[dict]:
+    """unread: only mails not opened yet (the widget's "새 메일" tab)."""
+    where = "WHERE m.read_at IS NULL " if unread else ""
     with db.connect() as conn:
         return db.rows(conn.execute(
             f"SELECT {LIST_COLUMNS} FROM mails m JOIN mail_accounts a ON a.id = m.account_id "
-            "ORDER BY m.received_at DESC LIMIT ?", (limit,)
+            f"{where}ORDER BY m.received_at DESC LIMIT ?", (limit,)
         ))
 
 

@@ -6,10 +6,16 @@ import { AgentPicker, canReceive } from './agents'
 const senderName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim() || s
 
 export function MailReview({ agents, onOpenAgent }: { agents: Agent[]; onOpenAgent: (id: string) => void }) {
-  const [items, setItems] = useState<MailItem[]>([])
+  const [all, setAll] = useState<MailItem[]>([])
+  const [unread, setUnread] = useState<MailItem[]>([])
+  const [showAll, setShowAll] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
   const [managing, setManaging] = useState(false)
-  const load = () => api<MailItem[]>('/api/mail/messages').then(setItems, () => {})
+  const load = () => {
+    api<MailItem[]>('/api/mail/messages?unread=true').then(setUnread, () => {})
+    api<MailItem[]>('/api/mail/messages').then(setAll, () => {})
+  }
+  const items = showAll ? all : unread
 
   useEffect(() => {
     load()
@@ -17,9 +23,25 @@ export function MailReview({ agents, onOpenAgent }: { agents: Agent[]; onOpenAge
     return () => clearInterval(timer)
   }, [])
 
+  const tab = (wantAll: boolean, label: string) => (
+    <button type="button" onClick={() => setShowAll(wantAll)} aria-pressed={showAll === wantAll} className={showAll === wantAll ? 'text-neutral-900' : 'font-medium text-neutral-400 hover:text-neutral-700'}>
+      {label}
+    </button>
+  )
+
   return (
-    <Widget title="메일 검토" action={<LinkButton onClick={() => setManaging(true)}>연결 관리</LinkButton>}>
-      {items.length === 0 && <Empty>메일 계정을 연결하면 새 메일이 요약되어 여기에 나옵니다</Empty>}
+    <Widget
+      title={
+        <span className="flex gap-3">
+          {tab(false, unread.length ? `새 메일 ${unread.length}` : '새 메일')}
+          {tab(true, '전체')}
+        </span>
+      }
+      action={<LinkButton onClick={() => setManaging(true)}>연결 관리</LinkButton>}
+    >
+      {items.length === 0 && (
+        <Empty>{all.length === 0 ? '메일 계정을 연결하면 새 메일이 요약되어 여기에 나옵니다' : showAll ? '메일이 없습니다' : '읽지 않은 새 메일이 없습니다'}</Empty>
+      )}
       {/* One line per mail: title, status tags, time. Sender and account are in the tooltip and the detail popup. */}
       <div className="divide-y divide-neutral-100">
         {items.map((m) => (

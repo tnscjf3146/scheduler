@@ -681,3 +681,11 @@ def test_sync_brings_read_state_from_the_mailbox(client, tmp_path, monkeypatch):
     mail._fetch_new(account)
     listed = client.get("/api/mail/messages").json()
     assert len(listed) == 2 and all(m["read_at"] for m in listed)
+
+
+def test_unread_filter(client, tmp_path):
+    _seed_mail(tmp_path)
+    assert [m["id"] for m in client.get("/api/mail/messages", params={"unread": True}).json()] == ["m1"]
+    client.get("/api/mail/messages/m1")
+    assert client.get("/api/mail/messages", params={"unread": True}).json() == []
+    assert [m["id"] for m in client.get("/api/mail/messages").json()] == ["m1"]  # still in "전체"
