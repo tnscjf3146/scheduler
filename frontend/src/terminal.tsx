@@ -15,6 +15,9 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
       fontFamily: "'Cascadia Mono', Consolas, 'D2Coding', monospace",
       fontSize: 13,
       cursorBlink: true,
+      // CLIs built for dark terminals paint some text (e.g. what you type) in plain RGB white, which no palette below
+      // can remap. xterm darkens any color that has too little contrast with the white background (4.5 = WCAG AA).
+      minimumContrastRatio: 4.5,
       // VS Code Light+ terminal colors: the default ANSI palette (yellow, white) is unreadable on white.
       theme: {
         background: '#ffffff',
@@ -81,11 +84,14 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
       ws = new WebSocket(`${proto}://${location.host}/api/agents/${agent.id}/terminal?cols=${term.cols}&rows=${term.rows}`)
       let first = true
       ws.onmessage = (e) => {
-        if (!first) return term.write(e.data)
+        // Dark-theme CLIs (Claude Code) draw typed text in RGB white: draw that black instead.
+        // ponytail: a sequence split across two messages slips through and falls back to minimumContrastRatio.
+        const data = (e.data as string).replaceAll('38;2;255;255;255', '38;2;0;0;0')
+        if (!first) return term.write(data)
         first = false
         replaying = true
         term.reset() // a reconnect replays everything again
-        term.write(e.data, () => (replaying = false))
+        term.write(data, () => (replaying = false))
       }
       ws.onopen = () => {
         retries = 0
