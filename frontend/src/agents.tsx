@@ -1,5 +1,7 @@
-import { useState } from 'react'
-import { api, type Agent } from './api'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { api, type Agent, type Extension } from './api'
+import { ExtensionList, ExtensionPicker, blankExtension } from './extensions'
 import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
 
 // Injected by the exe window (backend/desktop.py JsApi); absent in a dev browser.
@@ -10,7 +12,39 @@ declare global {
 }
 
 export const CLI_LABEL: Record<Agent['cli'], string> = { claude: 'Claude Code', codex: 'Codex', shell: 'PowerShell' }
-const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
+
+/** Agents a request can be typed to: a plain shell would run the line as a command. */
+export const canReceive = (a: Agent) => a.cli !== 'shell'
+
+/** Pick one agent to hand something to (a mail, a document request). */
+export function AgentPicker({ agents, value, onChange }: { agents: Agent[]; value: string; onChange: (id: string) => void }) {
+  if (agents.length === 0) return <p className="text-[13px] text-neutral-500">에이전트가 없습니다. Agent 위젯에서 Claude Code나 Codex 에이전트를 먼저 추가하세요.</p>
+  return (
+    <div className="scroll-hover flex min-h-0 flex-col overflow-hidden rounded-lg border border-neutral-200">
+      {agents.map((a) => {
+        const ok = canReceive(a)
+        const on = a.id === value
+        return (
+          <button
+            key={a.id}
+            disabled={!ok}
+            onClick={() => onChange(a.id)}
+            className={`flex items-center gap-3 border-b border-neutral-200 px-3.5 py-2.5 text-left last:border-b-0 disabled:opacity-40 ${on ? 'bg-neutral-100 shadow-[inset_3px_0_0_#262626]' : 'bg-white hover:bg-neutral-50'}`}
+          >
+            <span className={`flex size-8 shrink-0 items-center justify-center rounded-full text-[13px] font-bold ${on ? 'bg-neutral-700 text-white' : 'bg-neutral-200 text-neutral-600'}`}>
+              {a.name.slice(0, 1)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium">{a.name}</span>
+              <span className="block truncate text-[11px] text-neutral-500">{ok ? `${CLI_LABEL[a.cli]} · ${STATUS_LABEL[a.status]}` : 'PowerShell · 넘길 수 없음'}</span>
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+export const STATUS_LABEL: Record<Agent['status'], string> = { running: '실행 중', stopped: '대기', exited: '종료됨' }
 
 export function Agents({
   agents,
@@ -27,7 +61,22 @@ export function Agents({
 }) {
   // null: closed. {}: add a new agent. { from }: hand `from`'s work folder over to a new agent.
   const [adding, setAdding] = useState<{ from?: Agent } | null>(null)
-  const [menu, setMenu] = useState<string | null>(null)
+  // The open ⋯ menu: which agent, and where on screen (right beside the button that opened it).
+  const [menu, setMenuAt] = useState<{ id: string; x: number; y: number } | null>(null)
+  const setMenu = (m: null) => setMenuAt(m)
+  // Second tab: the skills and harness the user keeps, to attach to agents.
+  const [tab, setTab] = useState<'agents' | 'ext'>('agents')
+  const [exts, setExts] = useState<Extension[]>([])
+  const [editingExt, setEditingExt] = useState<Parameters<typeof ExtensionList>[0]['editing']>(null)
+  const loadExts = () => api<Extension[]>('/api/extensions').then(setExts, () => {})
+  useEffect(() => {
+    if (tab === 'ext') loadExts()
+  }, [tab])
+  const tabButton = (t: typeof tab, label: string) => (
+    <button type="button" onClick={() => setTab(t)} aria-pressed={tab === t} className={tab === t ? 'text-neutral-900' : 'font-medium text-neutral-400 hover:text-neutral-700'}>
+      {label}
+    </button>
+  )
 
   async function act(agent: Agent, action: 'restart' | 'fire' | 'delete') {
     setMenu(null)
@@ -54,9 +103,27 @@ export function Agents({
   }
 
   return (
-    <Widget title="Agent" action={<LinkButton onClick={() => setAdding({})}>+ 추가</LinkButton>}>
-      {agents.length === 0 && <Empty>에이전트를 추가하세요</Empty>}
-      {agents.map((a) => (
+    <Widget
+      title={
+        <span className="flex gap-3">
+          {tabButton('agents', 'Agent')}
+          {tabButton('ext', '스킬 & 하네스')}
+        </span>
+      }
+      action={
+        tab === 'agents' ? (
+          <LinkButton onClick={() => setAdding({})}>+ 추가</LinkButton>
+        ) : (
+          <span className="flex gap-3">
+            <LinkButton onClick={() => setEditingExt('import')}>가져오기</LinkButton>
+            <LinkButton onClick={() => setEditingExt(blankExtension('skill'))}>+ 만들기</LinkButton>
+          </span>
+        )
+      }
+    >
+      {tab === 'ext' && <ExtensionList agents={agents} items={exts} reload={loadExts} editing={editingExt} setEditing={setEditingExt} />}
+      {tab === 'agents' && agents.length === 0 && <Empty>에이전트를 추가하세요</Empty>}
+      {tab === 'agents' && agents.map((a) => (
         <div
           key={a.id}
           onClick={() => onSelect(a.id)}
@@ -74,17 +141,36 @@ export function Agents({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              setMenu(menu === a.id ? null : a.id)
+              const r = e.currentTarget.getBoundingClientRect()
+              setMenuAt(menu?.id === a.id ? null : { id: a.id, x: r.right + 6, y: r.top })
             }}
             className="px-1 text-sm opacity-60 hover:opacity-100"
             aria-label="메뉴"
           >
             ⋯
           </button>
-          {menu === a.id && (
-            <div className="absolute top-full right-2 z-10 mt-1 flex w-28 flex-col rounded-md border border-neutral-200 bg-white py-1 text-xs text-neutral-900 shadow-md" onClick={(e) => e.stopPropagation()}>
+          {menu?.id === a.id &&
+            // On <body>: the widget's scroll area would clip a menu sticking out past its edge.
+            createPortal(
+              <div className="fixed inset-0 z-20" onMouseDown={() => setMenu(null)}>
+            <div
+              style={{ left: Math.min(menu.x, window.innerWidth - 120), top: Math.min(menu.y, window.innerHeight - 170) }}
+              className="fixed flex w-28 flex-col rounded-md border border-neutral-200 bg-white py-1 text-xs text-neutral-900 shadow-md"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
               <button className="px-3 py-1.5 text-left hover:bg-neutral-100" onClick={() => act(a, 'restart')}>
                 재시작
+              </button>
+              <button
+                className="px-3 py-1.5 text-left hover:bg-neutral-100"
+                title={a.cwd}
+                onClick={() => {
+                  setMenu(null)
+                  api(`/api/agents/${a.id}/open-folder`, { method: 'POST' }).catch((err) => window.alert((err as Error).message))
+                }}
+              >
+                폴더 열기
               </button>
               <button
                 className="px-3 py-1.5 text-left hover:bg-neutral-100"
@@ -103,7 +189,9 @@ export function Agents({
                 삭제
               </button>
             </div>
-          )}
+              </div>,
+              document.body,
+            )}
         </div>
       ))}
       {adding && (
@@ -123,6 +211,7 @@ export function Agents({
 
 function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => void; onAdded: (a: Agent) => void }) {
   const [form, setForm] = useState({ name: '', role: '', persona: '', cli: from?.cli ?? ('claude' as Agent['cli']), cwd: '' })
+  const [extIds, setExtIds] = useState<string[] | null>(null) // null: not touched yet, the app's defaults
   const [error, setError] = useState<string | null>(null)
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [k]: e.target.value })
@@ -135,7 +224,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
   async function submit() {
     try {
       const url = from ? `/api/agents/${from.id}/handover` : '/api/agents'
-      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null } }))
+      onAdded(await api<Agent>(url, { method: 'POST', json: { ...form, cwd: form.cwd.trim() || null, extensions: form.cli === 'claude' ? (extIds ?? undefined) : [] } }))
     } catch (err) {
       setError((err as Error).message)
     }
@@ -174,7 +263,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
           onChange={set('persona')}
           placeholder={'예: 말이 짧고 결론부터 말한다. 확실하지 않으면 추측하지 않고 묻는다.'}
         />
-        <span className="text-[11px] font-normal text-neutral-500">작업 폴더의 AGENTS.md에 들어갑니다. 나중엔 그 파일을 직접 고치면 됩니다.</span>
+        <span className="text-[11px] font-normal text-neutral-500">에이전트가 시작할 때 정체성(이름·역할·성격)으로 들어갑니다. 작업 폴더에는 파일을 만들지 않습니다(Codex는 AGENTS.md를 만듭니다).</span>
       </label>
       <label className="flex flex-col gap-1 text-xs font-medium">
         CLI
@@ -186,7 +275,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
       </label>
       {from ? (
         <p className="rounded-md bg-neutral-100 px-3 py-2 text-[11px] text-neutral-600">
-          '{from.name}'은(는) 해고되고, 새 에이전트가 같은 작업 폴더에서 새 대화로 시작합니다. 폴더의 파일은 그대로이고 AGENTS.md만 새로 씁니다.
+          '{from.name}'은(는) 해고되고, 새 에이전트가 같은 작업 폴더에서 새 대화로 시작합니다. 폴더의 파일은 그대로입니다(Codex는 AGENTS.md만 새로 씁니다).
           <br />
           <span className="break-all text-neutral-500">{from.cwd}</span>
         </p>
@@ -203,6 +292,7 @@ function AddAgent({ from, onClose, onAdded }: { from?: Agent; onClose: () => voi
         </div>
       </label>
       )}
+      <ExtensionPicker value={extIds} onChange={setExtIds} cli={form.cli} />
       <p className="text-[11px] text-neutral-500">CLI 로그인은 터미널에서 처음 실행될 때 CLI가 직접 안내합니다.</p>
     </Modal>
   )

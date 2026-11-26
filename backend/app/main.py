@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import agents, approvals, db, mail, sessions, todos
+from . import agents, approvals, db, extensions, mail, sessions, todos
 
 
 def frontend_dist() -> Path:
@@ -29,7 +29,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Scheduler", lifespan=lifespan)
-for module in (todos, agents, approvals, mail):
+for module in (todos, agents, approvals, mail, extensions):
     app.include_router(module.router)
 
 

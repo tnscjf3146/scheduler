@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -6,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from . import db, sessions
+from . import db, defaults, extensions, sessions
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -16,66 +18,20 @@ CLIS = ("claude", "codex", "shell")
 class AgentIn(BaseModel):
     name: str = Field(min_length=1, max_length=50)
     role: str = Field(default="", max_length=100)
-    persona: str = Field(default="", max_length=4000)  # goes only into AGENTS.md, which the user edits from then on
+    persona: str = Field(default="", max_length=4000)  # part of the identity the agent starts with
     cli: str = Field(pattern="^(claude|codex|shell)$")
     cwd: str | None = None
+    # Skill / harness ids to attach (Claude Code only). None: the app's default skills.
+    extensions: list[str] | None = Field(default=None, max_length=50)
 
 
-AGENTS_MD = """# {name}
-
-너는 Scheduler 앱 안에서 일하는 에이전트 '{name}'이다.
-
-- 역할: {role}
-- 작업 폴더: 이 폴더 (`{cwd}`). 만드는 파일은 여기에 둔다.
-- 사용자는 Scheduler 대시보드 오른쪽 터미널에서 너와 대화한다.
-
-## 성격과 일하는 방식
-
-{persona}
-
-## 결재
-
-사용자가 정해야 하는 일이 생기면 혼자 정하지 말고 `scheduler` MCP 서버의 도구로 결재를 올린다.
-
-- 결재가 필요한 일: 밖으로 나가는 것(클라이언트에게 보낼 내용, 제출물 확정), 되돌리기 어려운 것, 방향을 정하는 것.
-- 결재가 필요 없는 일: 명령 실행 허락. 그건 CLI가 따로 묻는다.
-- `submit_approval`: `title`(제목), `decision`(사용자가 승인/반려할 질문), `background`(지금까지 한 일), `attachments`(파일 경로 목록).
-- `get_approval`: 받은 `id`로 결과를 확인한다. `pending`이면 아직 대기, `approved`면 진행, `rejected`면 `reason`을 읽고 고친다.
-- 결과는 자동으로 오지 않는다. 사용자가 "결재 확인해"라고 하거나 다음 단계로 넘어가기 전에 직접 확인한다.
-
-## 할 일 · 달력
-
-대시보드의 할 일 목록과 달력은 같은 데이터다. 마감 일시(`due_at`)가 있는 할 일이 달력의 그 날짜에 보이고, 날짜가 지나지 않은 것은 "다가오는 일정"에도 보인다. `scheduler` MCP 서버의 도구로 다룬다.
-
-- `list_todos`: 목록 보기. `from`·`to`(YYYY-MM-DD)로 기간을, `done`으로 완료 여부를 거른다.
-- `add_todo`: `title`, `due_at`(YYYY-MM-DDTHH:MM, 현지 시간, 선택).
-- `update_todo`: `id`와 바꿀 값만. 완료 처리는 `done: true`. `memo`(메모)와 `subtasks`(하위 할 일 `[{{"title", "done"}}]`)는 통째로 바뀌니 읽은 뒤 고쳐서 보낸다.
-- `delete_todo`: 되돌릴 수 없다. 사용자가 지우라고 한 것만 지운다.
-- 사용자가 "내일", "다음 주 월요일"처럼 말하면 오늘 날짜를 기준으로 계산한다. 시간을 말하지 않았으면 09:00으로 둔다.
-
-## 할 수 없는 것
-
-메일에는 접근할 수 없다. 필요하면 사용자에게 부탁한다.
-"""
-
-
-def _write_instructions(workspace: Path, name: str, role: str, persona: str, replace_agents_md: bool = False) -> None:
-    """AGENTS.md is the one source, read by Codex as is. Claude Code and Gemini CLI read their own file, which imports it.
-    Files that already exist are left alone: a user-chosen folder may be a project with its own.
-    A handover replaces AGENTS.md, since it describes the agent that just left."""
-    files = {
-        "AGENTS.md": AGENTS_MD.format(
-            name=name,
-            role=role or "(정해지지 않음, 사용자에게 물어본다)",
-            persona=persona or "(정해지지 않음. 사용자가 이 부분을 직접 채운다)",
-            cwd=workspace,
-        ),
-        "CLAUDE.md": "@AGENTS.md\n",
-        "GEMINI.md": "@AGENTS.md\n",
-    }
-    for file, text in files.items():
-        if not (workspace / file).exists() or (replace_agents_md and file == "AGENTS.md"):
-            (workspace / file).write_text(text, encoding="utf-8")
+def write_agents_md(agent: dict, replace: bool = False) -> None:
+    """Codex reads neither hooks nor skills, so it gets its identity and the app's rules as AGENTS.md in its work
+    folder. An existing file is left alone (a user-chosen folder may be a project with its own) unless a handover
+    replaces it. Claude Code agents get nothing in their folder: see extensions.build_plugin."""
+    path = Path(agent["cwd"]) / "AGENTS.md"
+    if replace or not path.exists():
+        path.write_text(defaults.agents_md(agent), encoding="utf-8")
 
 
 def _get(conn, agent_id: str) -> dict:
@@ -103,15 +59,18 @@ def create(body: AgentIn) -> dict:
         # Own workspace per agent. Kept when the agent is deleted: it may hold the agent's work.
         workspace = db.data_dir() / "agents" / agent_id / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
-    _write_instructions(workspace, body.name.strip(), body.role.strip(), body.persona.strip())
     with db.connect() as conn:
-        return _insert(conn, agent_id, body, workspace)
+        agent = _insert(conn, agent_id, body, workspace)
+    if agent["cli"] == "codex":
+        write_agents_md(agent)
+    return agent
 
 
 def _insert(conn, agent_id: str, body: AgentIn, workspace: Path) -> dict:
     conn.execute(
-        "INSERT INTO agents (id, name, role, cli, cwd, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (agent_id, body.name.strip(), body.role.strip(), body.cli, str(workspace), db.now()),
+        "INSERT INTO agents (id, name, role, cli, cwd, created_at, extensions, persona) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (agent_id, body.name.strip(), body.role.strip(), body.cli, str(workspace), db.now(),
+         json.dumps(extensions.builtin_ids() if body.extensions is None else body.extensions), body.persona.strip()),
     )
     return {**_get(conn, agent_id), "status": "stopped"}
 
@@ -119,16 +78,18 @@ def _insert(conn, agent_id: str, body: AgentIn, workspace: Path) -> dict:
 @router.post("/{agent_id}/handover", status_code=201)
 def handover(agent_id: str, body: AgentIn) -> dict:
     """Fires the agent and hires a new one into the same work folder (body.cwd is ignored).
-    The new agent gets its own AGENTS.md and starts a fresh conversation; the old conversation stays on disk."""
+    The new agent starts a fresh conversation with its own identity; the old conversation stays on disk."""
     with db.connect() as conn:
         workspace = Path(_get(conn, agent_id)["cwd"])
         sessions.stop(agent_id)
-        _write_instructions(workspace, body.name.strip(), body.role.strip(), body.persona.strip(), replace_agents_md=True)
         new_id = db.new_id()
         (db.data_dir() / "agents" / new_id).mkdir(parents=True, exist_ok=True)
         (db.data_dir() / "agents" / new_id / sessions.FRESH_MARKER).touch()
         conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
-        return _insert(conn, new_id, body, workspace)
+        agent = _insert(conn, new_id, body, workspace)
+    if agent["cli"] == "codex":
+        write_agents_md(agent, replace=True)  # the old one describes the agent that just left
+    return agent
 
 
 @router.post("/{agent_id}/restart")
@@ -138,6 +99,16 @@ def restart(agent_id: str) -> dict:
         agent = _get(conn, agent_id)
     sessions.stop(agent_id)
     return {**agent, "status": "stopped"}
+
+
+@router.post("/{agent_id}/open-folder", status_code=204)
+def open_folder(agent_id: str) -> None:
+    """Shows the agent's working folder in File Explorer."""
+    with db.connect() as conn:
+        cwd = _get(conn, agent_id)["cwd"]
+    if not Path(cwd).is_dir():
+        raise HTTPException(404, f"작업 폴더가 없습니다: {cwd}")
+    os.startfile(cwd)
 
 
 @router.delete("/{agent_id}", status_code=204)

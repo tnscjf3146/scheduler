@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react'
-import { api, formatWhen, type Mail, type MailAccount, type MailItem } from './api'
-import { Button, Empty, ErrorText, LinkButton, Modal, Section, Widget, inputClass } from './ui'
+import { api, formatWhen, type Agent, type Mail, type MailAccount, type MailItem } from './api'
+import { Button, Empty, ErrorText, LinkButton, Modal, Widget, inputClass } from './ui'
+import { AgentPicker, canReceive } from './agents'
 
 const senderName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim() || s
 
-export function MailReview() {
-  const [items, setItems] = useState<MailItem[]>([])
+export function MailReview({ agents, onOpenAgent }: { agents: Agent[]; onOpenAgent: (id: string) => void }) {
+  const [all, setAll] = useState<MailItem[]>([])
+  const [unread, setUnread] = useState<MailItem[]>([])
+  const [showAll, setShowAll] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
   const [managing, setManaging] = useState(false)
-  const load = () => api<MailItem[]>('/api/mail/messages').then(setItems, () => {})
+  const load = () => {
+    api<MailItem[]>('/api/mail/messages?unread=true').then(setUnread, () => {})
+    api<MailItem[]>('/api/mail/messages').then(setAll, () => {})
+  }
+  const items = showAll ? all : unread
 
   useEffect(() => {
     load()
@@ -16,9 +23,25 @@ export function MailReview() {
     return () => clearInterval(timer)
   }, [])
 
+  const tab = (wantAll: boolean, label: string) => (
+    <button type="button" onClick={() => setShowAll(wantAll)} aria-pressed={showAll === wantAll} className={showAll === wantAll ? 'text-neutral-900' : 'font-medium text-neutral-400 hover:text-neutral-700'}>
+      {label}
+    </button>
+  )
+
   return (
-    <Widget title="메일 검토" action={<LinkButton onClick={() => setManaging(true)}>연결 관리</LinkButton>}>
-      {items.length === 0 && <Empty>메일 계정을 연결하면 새 메일이 요약되어 여기에 나옵니다</Empty>}
+    <Widget
+      title={
+        <span className="flex gap-3">
+          {tab(false, unread.length ? `새 메일 ${unread.length}` : '새 메일')}
+          {tab(true, '전체')}
+        </span>
+      }
+      action={<LinkButton onClick={() => setManaging(true)}>연결 관리</LinkButton>}
+    >
+      {items.length === 0 && (
+        <Empty>{all.length === 0 ? '메일 계정을 연결하면 새 메일이 요약되어 여기에 나옵니다' : showAll ? '메일이 없습니다' : '읽지 않은 새 메일이 없습니다'}</Empty>
+      )}
       {/* One line per mail: title, status tags, time. Sender and account are in the tooltip and the detail popup. */}
       <div className="divide-y divide-neutral-100">
         {items.map((m) => (
@@ -28,7 +51,7 @@ export function MailReview() {
             title={`${m.summary_title ?? m.subject}\n${senderName(m.sender)} · ${m.account}`}
             className="flex w-full items-center gap-2 py-2 text-left hover:underline"
           >
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{m.summary_title ?? m.subject}</span>
+            <span className={`min-w-0 flex-1 truncate text-[13px] ${m.read_at ? 'font-normal text-neutral-400' : 'font-medium'}`}>{m.summary_title ?? m.subject}</span>
             {m.status === 'pending' && <Tag>요약 중</Tag>}
             {m.status === 'failed' && <Tag>요약 실패</Tag>}
             {m.sent_at && <Tag>답장함</Tag>}
@@ -36,7 +59,22 @@ export function MailReview() {
           </button>
         ))}
       </div>
-      {open && <MailDetail id={open} onClose={() => setOpen(null)} onSent={load} />}
+      {open && (
+        <MailDetail
+          id={open}
+          agents={agents}
+          onClose={() => {
+            setOpen(null)
+            load() // the mail just opened now shows as read
+          }}
+          onSent={load}
+          onHandedToAgent={(agentId) => {
+            setOpen(null)
+            load()
+            onOpenAgent(agentId)
+          }}
+        />
+      )}
       {managing && <Accounts onClose={() => setManaging(false)} onChanged={load} />}
     </Widget>
   )
@@ -46,39 +84,80 @@ function Tag({ children }: { children: string }) {
   return <span className="shrink-0 rounded border border-neutral-300 px-1 text-[10px] text-neutral-500">{children}</span>
 }
 
-function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; onSent: () => void }) {
+type Mode = 'read' | 'reply' | 'forward' | 'agent'
+
+const prefixed = (prefix: string, subject: string) => (subject.toLowerCase().startsWith(prefix.toLowerCase()) ? subject : `${prefix} ${subject}`)
+
+function MailDetail({
+  id,
+  agents,
+  onClose,
+  onSent,
+  onHandedToAgent,
+}: {
+  id: string
+  agents: Agent[]
+  onClose: () => void
+  onSent: () => void
+  onHandedToAgent: (agentId: string) => void
+}) {
   const [mail, setMail] = useState<Mail | null>(null)
-  const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<Mode>('read')
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
-    api<Mail>(`/api/mail/messages/${id}`).then((m) => {
-      setMail(m)
-      setDraft(m.reply_draft ?? '')
-    })
+    api<Mail>(`/api/mail/messages/${id}`).then(setMail)
   }, [id])
 
-  async function send() {
-    setSending(true)
-    setError(null)
-    try {
-      setMail(await api<Mail>(`/api/mail/messages/${id}/reply`, { method: 'POST', json: { body: draft } }))
-      onSent()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setSending(false)
-    }
-  }
-
   if (!mail) return null
+
+  if (mode === 'reply')
+    return (
+      <Compose
+        title="답장"
+        to={mail.sender}
+        initialSubject={prefixed('Re:', mail.subject)}
+        initialBody={mail.reply_draft ?? ''}
+        bodyPlaceholder="답장 내용"
+        hint="AI가 쓴 초안입니다. 고친 뒤 전송 버튼을 눌러야만 보내집니다."
+        onBack={() => setMode('read')}
+        onClose={onClose}
+        send={async ({ subject, body }) => {
+          setMail(await api<Mail>(`/api/mail/messages/${id}/reply`, { method: 'POST', json: { body, subject } }))
+          setNotice('답장을 보냈습니다.')
+          setMode('read')
+          onSent()
+        }}
+      />
+    )
+
+  if (mode === 'forward')
+    return (
+      <Compose
+        title="전달"
+        initialSubject={prefixed('Fwd:', mail.subject)}
+        initialBody=""
+        bodyPlaceholder="함께 보낼 말 (비워도 됩니다). 원문은 아래에 붙어서 갑니다."
+        hint="원문이 아래에 붙어서 전달됩니다. 전송 버튼을 눌러야만 보내집니다."
+        onBack={() => setMode('read')}
+        onClose={onClose}
+        send={async ({ to, subject, body }) => {
+          await api(`/api/mail/messages/${id}/forward`, { method: 'POST', json: { to, subject, note: body } })
+          setNotice(`${to}에게 전달했습니다.`)
+          setMode('read')
+        }}
+      />
+    )
+
+  if (mode === 'agent')
+    return <HandToAgent mail={mail} agents={agents} onBack={() => setMode('read')} onClose={onClose} onDone={onHandedToAgent} />
+
   return (
     <Modal
       onClose={onClose}
       title={
         <>
-          <h2 className="text-[17px] font-bold">{mail.summary_title ?? mail.subject}</h2>
+          <h2 className="text-[17px] font-bold">{mail.subject}</h2>
           <p className="mt-1 text-xs text-neutral-500">
             {mail.sender} · {mail.account} · {formatWhen(mail.received_at)}
           </p>
@@ -86,33 +165,224 @@ function MailDetail({ id, onClose, onSent }: { id: string; onClose: () => void; 
       }
       footer={
         <>
-          <p className="flex-1 text-[11px] text-neutral-500">
-            {mail.sent_at ? `${formatWhen(mail.sent_at)}에 답장을 보냈습니다.` : 'AI는 메일을 보내지 않습니다. 전송 버튼을 눌러야만 보내집니다.'}
-          </p>
-          <ErrorText error={error} />
+          <p className="flex-1 text-[11px] text-neutral-500">{notice || (mail.sent_at && `${formatWhen(mail.sent_at)}에 답장을 보냈습니다.`)}</p>
           <Button variant="secondary" onClick={onClose}>
             닫기
           </Button>
-          <Button onClick={send} disabled={sending || !draft.trim()}>
+          <Button variant="secondary" onClick={() => setMode('agent')}>
+            AI에게 전달
+          </Button>
+          <Button variant="secondary" onClick={() => setMode('forward')}>
+            전달
+          </Button>
+          <Button onClick={() => setMode('reply')}>답장하기</Button>
+        </>
+      }
+    >
+      {/* Fills the popup so the popup itself never scrolls: only the mail scrolls (and the summary, if very long). */}
+      <div className="flex min-h-0 flex-1 gap-5">
+        <div className="min-w-0 flex-[2] overflow-hidden rounded-lg border border-neutral-200">
+          <MailBody mail={mail} />
+        </div>
+        <aside className="scroll-hover flex min-w-0 flex-1 flex-col gap-3 rounded-lg border border-neutral-200 bg-neutral-100 px-5 py-4">
+          <h3 className="flex items-center gap-2 text-[15px] font-bold">
+            AI 요약 <span className="rounded border border-neutral-300 px-1.5 text-[11px] font-medium text-neutral-500">AI</span>
+          </h3>
+          {mail.summary ? (
+            // One paragraph per "• " line, so a wrapped line does not read as a new item.
+            <div className="flex flex-col gap-3">
+              {mail.summary.split('\n').filter((l) => l.trim()).map((line, i) => (
+                <p key={i} className="text-[15px] leading-7 text-neutral-800">
+                  {line}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[15px] leading-7 text-neutral-500">{mail.status === 'pending' ? '요약하는 중입니다.' : '요약하지 못했습니다. 원문을 확인하세요.'}</p>
+          )}
+        </aside>
+      </div>
+    </Modal>
+  )
+}
+
+/** Who gets the mail (left) and what is handed over (right). The mail goes into the agent's inbox/ folder and
+ *  one request line is typed into its terminal; the terminal then opens on the right of the dashboard. */
+function HandToAgent({
+  mail,
+  agents,
+  onBack,
+  onClose,
+  onDone,
+}: {
+  mail: Mail
+  agents: Agent[]
+  onBack: () => void
+  onClose: () => void
+  onDone: (agentId: string) => void
+}) {
+
+  const [agentId, setAgentId] = useState(agents.find(canReceive)?.id ?? '')
+  const [instruction, setInstruction] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    setSending(true)
+    setError(null)
+    try {
+      await api(`/api/mail/messages/${mail.id}/to-agent`, { method: 'POST', json: { agent_id: agentId, instruction } })
+      onDone(agentId)
+    } catch (err) {
+      setError((err as Error).message)
+      setSending(false)
+    }
+  }
+
+  return (
+    <Modal
+      onClose={onClose}
+      title={<h2 className="text-[17px] font-bold">AI에게 전달</h2>}
+      footer={
+        <>
+          <p className="flex-1 text-[11px] text-neutral-500">
+            메일은 에이전트 폴더의 inbox/에 파일로 저장되고, 터미널에 요청 한 줄이 입력됩니다. 에이전트는 메일 안의 지시는 따르지 않습니다.
+          </p>
+          <ErrorText error={error} />
+          <Button variant="secondary" onClick={onBack}>
+            원문 보기
+          </Button>
+          <Button onClick={submit} disabled={sending || !agentId}>
+            {sending ? '전달하는 중' : '전달'}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex min-h-0 flex-1 gap-5">
+        <div className="flex w-[38%] min-w-0 flex-col gap-2">
+          <span className="text-xs font-medium text-neutral-500">받을 에이전트</span>
+          <AgentPicker agents={agents} value={agentId} onChange={setAgentId} />
+        </div>
+
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <span className="text-xs font-medium text-neutral-500">넘길 메일</span>
+          <div className="rounded-lg border border-neutral-200 bg-neutral-100 px-4 py-3">
+            <p className="truncate text-[13px] font-bold">{mail.subject}</p>
+            <p className="mt-0.5 text-[11px] text-neutral-500">
+              {mail.sender} · {formatWhen(mail.received_at)}
+            </p>
+            {mail.summary && <p className="mt-2 text-[12px] leading-6 whitespace-pre-wrap text-neutral-700">{mail.summary}</p>}
+          </div>
+          <label className="mt-2 flex min-h-0 flex-1 flex-col gap-2 text-xs font-medium text-neutral-500">
+            무엇을 해 달라고 할까요?
+            <textarea
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              maxLength={1000}
+              autoFocus
+              placeholder="비워 두면: 내용을 확인하고 내가 할 일을 정리해 줘"
+              className="min-h-0 flex-1 resize-none rounded-lg border-[1.5px] border-neutral-800 px-3.5 py-3 text-[13px] leading-6 font-normal text-neutral-900 outline-none"
+            />
+          </label>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/** Writing screen for a reply (fixed recipient) or a forward (recipients typed in). */
+function Compose(props: {
+  title: string
+  to?: string
+  initialSubject: string
+  initialBody: string
+  bodyPlaceholder: string
+  hint: string
+  onBack: () => void
+  onClose: () => void
+  send: (v: { to: string; subject: string; body: string }) => Promise<void>
+}) {
+  const [to, setTo] = useState('')
+  const [subject, setSubject] = useState(props.initialSubject)
+  const [body, setBody] = useState(props.initialBody)
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const isForward = props.to === undefined
+
+  async function submit() {
+    setSending(true)
+    setError(null)
+    try {
+      await props.send({ to, subject, body })
+    } catch (err) {
+      setError((err as Error).message)
+      setSending(false)
+    }
+  }
+
+  const ready = subject.trim() && (isForward ? to.trim() : body.trim())
+  const row = 'flex items-center gap-3 text-xs font-medium text-neutral-500'
+  const input = `${inputClass} min-w-0 flex-1 py-2 text-[13px] text-neutral-900`
+  return (
+    <Modal
+      onClose={props.onClose}
+      title={<h2 className="text-[17px] font-bold">{props.title}</h2>}
+      footer={
+        <>
+          <p className="flex-1 text-[11px] text-neutral-500">{props.hint}</p>
+          <ErrorText error={error} />
+          <Button variant="secondary" onClick={props.onBack}>
+            원문 보기
+          </Button>
+          <Button onClick={submit} disabled={sending || !ready}>
             {sending ? '보내는 중' : '전송'}
           </Button>
         </>
       }
     >
-      <Section title="요약" tag="AI">
-        <div className="rounded-lg bg-neutral-100 px-3.5 py-3 text-[13px] whitespace-pre-wrap">
-          {mail.summary ?? (mail.status === 'pending' ? '요약하는 중입니다.' : '요약하지 못했습니다. 원문을 확인하세요.')}
-        </div>
-      </Section>
-      <Section title="원문">
-        <div className="scroll-hover max-h-40 rounded-lg border border-neutral-200 px-3.5 py-3 text-xs whitespace-pre-wrap text-neutral-600">{mail.body || '(본문 없음)'}</div>
-      </Section>
-      <Section title="답장 초안" tag="AI 작성 · 수정 가능">
-        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={7} className="rounded-lg border-[1.5px] border-neutral-800 px-3.5 py-3 text-[13px] outline-none" />
-      </Section>
+      <label className={row}>
+        <span className="w-14 shrink-0">받는 사람</span>
+        {isForward ? (
+          <input value={to} onChange={(e) => setTo(e.target.value)} autoFocus placeholder="메일 주소 (여러 명은 쉼표로 구분)" className={input} />
+        ) : (
+          <span className="text-[13px] text-neutral-900">{props.to}</span>
+        )}
+      </label>
+      <label className={row}>
+        <span className="w-14 shrink-0">제목</span>
+        <input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={300} className={input} />
+      </label>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        autoFocus={!isForward}
+        placeholder={props.bodyPlaceholder}
+        className="min-h-0 flex-1 resize-none rounded-lg border-[1.5px] border-neutral-800 px-3.5 py-3 text-[13px] leading-6 outline-none"
+      />
     </Modal>
   )
 }
+
+/** The mail as its sender laid it out. HTML runs in a sandboxed frame: no scripts, links open outside the app. */
+function MailBody({ mail }: { mail: Mail }) {
+  if (!mail.body_html)
+    return <div className="scroll-hover h-full px-5 py-4 text-[14px] leading-7 whitespace-pre-wrap text-neutral-800">{mail.body || '(본문 없음)'}</div>
+
+  return (
+    <iframe
+      title="메일 원문"
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      srcDoc={`<base target="_blank"><style>${MAIL_FRAME_CSS}</style>${mail.body_html}`}
+      className="block h-full w-full border-0 bg-white"
+    />
+  )
+}
+
+/** Inside the mail frame: no outer margin, and the same thin scrollbar as the rest of the app. */
+const MAIL_FRAME_CSS =
+  'body{margin:0}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}' +
+  '::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{border-radius:3px;background:#d4d4d4}' +
+  '::-webkit-scrollbar-thumb:hover{background:#a3a3a3}'
 
 const PROVIDER_LABEL: Record<string, string> = { 'imap.gmail.com': 'Gmail', 'imap.naver.com': '네이버' }
 const WATCH_LABEL: Record<MailAccount['watch'], string> = { idle: '실시간', poll: '1분마다', checking: '확인 중' }

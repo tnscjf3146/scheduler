@@ -32,7 +32,9 @@
 | 메일 검토 | DELETE | `/api/mail/accounts/{id}` | 연결 끊기 (받아 둔 메일도 삭제) |
 | 메일 검토 | GET | `/api/mail/messages` | 받은 메일 목록 (요약 제목 포함) |
 | 메일 검토 | GET | `/api/mail/messages/{id}` | 메일 상세: 요약, 원문, 답장 초안 |
-| 메일 검토 | POST | `/api/mail/messages/{id}/reply` | 답장 전송. 사용자가 전송 버튼을 눌렀을 때만 부른다 |
+| 메일 검토 | POST | `/api/mail/messages/{id}/reply` | 답장 전송. `body`, `subject`(비우면 `Re: 원래 제목`). 사용자가 전송 버튼을 눌렀을 때만 부른다 |
+| 메일 검토 | POST | `/api/mail/messages/{id}/forward` | 전달. `to`(쉼표로 구분, 10명까지), `subject`(비우면 `Fwd: 원래 제목`), `note`. 원문은 아래에 붙인다. 사용자가 전송 버튼을 눌렀을 때만 부른다 |
+| 메일 검토 | POST | `/api/mail/messages/{id}/to-agent` | AI에게 전달. `agent_id`, `instruction`. 메일을 에이전트 폴더의 `inbox/`에 파일로 저장하고 터미널에 요청 한 줄을 입력한다. PowerShell 에이전트는 거부 |
 | 메일 검토 | POST | `/api/mail/sync` | 새 메일 확인을 바로 실행 |
 
 ## WebSocket: 에이전트 터미널

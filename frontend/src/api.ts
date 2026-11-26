@@ -19,6 +19,29 @@ export type Approval = {
   reason: string | null
   created_at: string
   decided_at: string | null
+  kind: 'approval' | 'report'
+  form_name: string
+  fields: { label: string; value: string; long: boolean }[]
+}
+export type Extension = {
+  id: string
+  kind: 'skill' | 'hook'
+  name: string
+  description: string
+  body: string
+  event: string
+  matcher: string
+  command: string
+  created_by: string | null
+  created_at: string
+  builtin: number
+  agent_ids: string[]
+}
+export type DocForm = {
+  id: string
+  name: string
+  kind: 'approval' | 'report'
+  fields: { label: string; long: boolean }[]
 }
 export type MailItem = {
   id: string
@@ -28,9 +51,10 @@ export type MailItem = {
   summary_title: string | null
   status: 'pending' | 'ready' | 'failed'
   sent_at: string | null
+  read_at: string | null
   account: string
 }
-export type Mail = MailItem & { body: string; summary: string | null; reply_draft: string | null }
+export type Mail = MailItem & { body: string; body_html: string | null; summary: string | null; reply_draft: string | null }
 export type MailAccount = { id: string; label: string; email: string; imap_host: string; watch: 'idle' | 'poll' | 'checking' }
 
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {

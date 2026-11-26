@@ -53,22 +53,52 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
         e.preventDefault()
         return false
       }
+      // Ctrl+V: leave it to the browser's own paste (xterm hears the paste event), instead of sending ^V.
+      if (e.ctrlKey && !e.altKey && e.code === 'KeyV') return false
+      // Shift+Enter: a new line in the prompt instead of sending it. Claude Code takes ESC+Enter as that.
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === 'Enter') {
+        // Korean IME: the syllable being typed is committed around this key, and xterm sends it a moment later
+        // (in a timeout of its own). Send the new line after that, or the syllable lands on the new line.
+        const newline = () => setTimeout(() => send({ type: 'input', data: '\x1b\r' }), 30)
+        if (e.type === 'keydown' && e.isComposing) term.textarea?.addEventListener('compositionend', newline, { once: true })
+        else if (e.type === 'keydown') newline()
+        e.preventDefault()
+        return false
+      }
       return true
     })
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/api/agents/${agent.id}/terminal?cols=${term.cols}&rows=${term.rows}`)
-    // The first message replays the scrollback. While xterm parses it, it answers old terminal queries
-    // (e.g. "ESC[c" -> "ESC[?1;2c"); those answers must not be typed into the live shell.
+    // The first message of every connection replays the scrollback. While xterm parses it, it answers old terminal
+    // queries (e.g. "ESC[c" -> "ESC[?1;2c"); those answers must not be typed into the live shell.
     let replaying = true
-    let first = true
-    ws.onmessage = (e) => {
-      if (!first) return term.write(e.data)
-      first = false
-      term.write(e.data, () => (replaying = false))
+    let ws: WebSocket
+    let disposed = false
+    let retries = 0
+    // The agent keeps running on the server when the connection drops, so just connect again: the replay
+    // redraws the screen as it is now.
+    const connect = () => {
+      ws = new WebSocket(`${proto}://${location.host}/api/agents/${agent.id}/terminal?cols=${term.cols}&rows=${term.rows}`)
+      let first = true
+      ws.onmessage = (e) => {
+        if (!first) return term.write(e.data)
+        first = false
+        replaying = true
+        term.reset() // a reconnect replays everything again
+        term.write(e.data, () => (replaying = false))
+      }
+      ws.onopen = () => {
+        retries = 0
+        onStatus()
+      }
+      ws.onclose = (e) => {
+        if (disposed) return
+        if (e.code === 4404) return term.write('\r\n\x1b[90m[에이전트가 삭제되었습니다]\x1b[0m\r\n')
+        term.write('\r\n\x1b[90m[연결이 끊겼습니다. 다시 연결하는 중…]\x1b[0m\r\n')
+        setTimeout(() => disposed || connect(), Math.min(1000 * 2 ** retries++, 10_000))
+      }
     }
-    ws.onopen = onStatus
-    ws.onclose = () => term.write('\r\n\x1b[90m[연결이 끊겼습니다]\x1b[0m\r\n')
+    connect()
     const send = (msg: object) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg))
     const input = term.onData((data) => replaying || send({ type: 'input', data }))
     const observer = new ResizeObserver(() => {
@@ -79,9 +109,9 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
     term.focus()
 
     return () => {
+      disposed = true
       observer.disconnect()
       input.dispose()
-      ws.onclose = null
       ws.close()
       term.dispose()
     }
