@@ -1,0 +1,85 @@
+@import 'tailwindcss';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Pretendard', 'Noto Sans KR', 'Segoe UI', sans-serif;
+}
+
+/* Scrollbars, app-wide: a thin gray bar with no arrows, shown only while the pointer is over the scrolling area.
+   Only the ::-webkit-scrollbar rules: in Chromium (WebView2) setting scrollbar-width/-color would switch these off. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #d4d4d4;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a3a3a3;
+}
+
+/* .scroll-hover: the bar exists only while the pointer is over the area. Chromium does not repaint a scrollbar
+   when only its colour changes on :hover (the bar lingers), so the overflow itself is switched instead.
+   The gutter is always reserved, so nothing shifts when the bar appears. */
+.scroll-hover {
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+.scroll-hover:hover {
+  overflow-y: auto;
+}
+
+/* .scroll-fade: the top and bottom edges blur out while there is more to scroll that way.
+   Driven by the element's own scroll position; when nothing scrolls, nothing fades. */
+@property --fade-top {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-bottom {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scroll-fade {
+  from {
+    --fade-top: 0px;
+    --fade-bottom: 24px;
+  }
+  10% {
+    --fade-top: 16px;
+  }
+  90% {
+    --fade-bottom: 24px;
+  }
+  to {
+    --fade-top: 16px;
+    --fade-bottom: 0px;
+  }
+}
+.scroll-fade {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  animation: scroll-fade linear both;
+  animation-timeline: scroll(self);
+}
+
+/* Text can be selected and copied (desktop.py text_select=True), except on controls and headers, where a drag
+   would only highlight labels. */
+button,
+header,
+[role='tab'] {
+  user-select: none;
+}
