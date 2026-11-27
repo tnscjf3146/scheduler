@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Agent, type Extension } from './api'
+import { api, type Agent, type Extension, type SkillSet } from './api'
 import { Button, Empty, ErrorText, Modal, inputClass } from './ui'
 
 export const KIND_LABEL = { skill: '스킬', hook: '하네스' } as const
@@ -20,7 +20,10 @@ const eventLabel = (e: string) => EVENTS[e] ?? e
 /** Skills and harness reach an agent as a Claude Code plugin; Codex has no such mechanism. */
 export const takesExtensions = (a: Agent) => a.cli === 'claude'
 
-type Draft = Omit<Extension, 'id' | 'created_by' | 'created_at' | 'agent_ids' | 'builtin'>
+/** Every agent that gets it: attached one by one or through a set. */
+const usedBy = (x: Extension) => [...new Set([...x.agent_ids, ...x.via_sets])]
+
+type Draft = Omit<Extension, 'id' | 'created_by' | 'created_at' | 'agent_ids' | 'via_sets' | 'builtin'>
 const blank = (kind: Extension['kind']): Draft => ({ kind, name: '', description: '', body: '', event: 'PreToolUse', matcher: '', command: '' })
 const draftOf = ({ kind, name, description, body, event, matcher, command }: Draft): Draft => ({ kind, name, description, body, event, matcher, command })
 
@@ -48,7 +51,7 @@ export function ExtensionList({ agents, items, reload, editing, setEditing }: {
               {x.kind === 'hook' ? `${eventLabel(x.event)}${x.matcher ? ` · ${x.matcher}` : ''} · ${x.command}` : x.description}
             </span>
           </span>
-          <span className="shrink-0 text-[11px] text-neutral-500">{x.agent_ids.length ? `에이전트 ${x.agent_ids.length}` : '미적용'}</span>
+          <span className="shrink-0 text-[11px] text-neutral-500">{usedBy(x).length ? `에이전트 ${usedBy(x).length}` : '미적용'}</span>
         </button>
       ))}
       {editing === 'import' && <ImportDialog onClose={() => setEditing(null)} onImported={(x) => (reload(), setEditing(x))} />}
@@ -208,7 +211,10 @@ function ExtensionEditor({ initial, agents, onClose, onSaved }: { initial: Exten
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13px]">{a.name}</span>
-                  <span className="block text-[11px] text-neutral-500">{takesExtensions(a) ? 'Claude Code' : `${a.cli === 'codex' ? 'Codex' : 'PowerShell'} · 적용 안 됨`}</span>
+                  <span className="block text-[11px] text-neutral-500">
+                    {takesExtensions(a) ? 'Claude Code' : `${a.cli === 'codex' ? 'Codex' : 'PowerShell'} · 적용 안 됨`}
+                    {saved?.via_sets.includes(a.id) && ' · 세트로 적용됨'}
+                  </span>
                 </span>
               </label>
             ))}
@@ -273,18 +279,18 @@ function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported
   )
 }
 
-/** Checkboxes in the add-agent form. Untouched (null), the app's default skills are checked. */
+/** Checkboxes in the add-agent form: skills and harness attached one by one, besides the sets. */
 export function ExtensionPicker({ value, onChange, cli }: { value: string[] | null; onChange: (ids: string[]) => void; cli: Agent['cli'] }) {
   const [items, setItems] = useState<Extension[]>([])
   useEffect(() => {
     api<Extension[]>('/api/extensions').then(setItems, () => {})
   }, [])
   if (items.length === 0) return null
-  const checked = value ?? items.filter((x) => x.builtin).map((x) => x.id)
+  const checked = value ?? []
   const on = cli === 'claude'
   return (
     <div className="flex flex-col gap-1 text-xs font-medium">
-      스킬 & 하네스
+      개별 스킬 & 하네스 (세트 말고 따로 붙일 것)
       <div className={`flex flex-wrap gap-1.5 ${on ? '' : 'opacity-40'}`}>
         {items.map((x) => (
           <label key={x.id} className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 font-normal">
@@ -296,6 +302,194 @@ export function ExtensionPicker({ value, onChange, cli }: { value: string[] | nu
       </div>
       {!on && <span className="text-[11px] font-normal text-neutral-500">Claude Code 에이전트에만 붙일 수 있습니다.</span>}
     </div>
+  )
+}
+
+/** Set checkboxes in the add-agent form. Untouched (null), the app's default set is checked. */
+export function SetPicker({ value, onChange, cli }: { value: string[] | null; onChange: (ids: string[]) => void; cli: Agent['cli'] }) {
+  const [sets, setSets] = useState<SkillSet[]>([])
+  useEffect(() => {
+    api<SkillSet[]>('/api/extensions/sets').then(setSets, () => {})
+  }, [])
+  if (sets.length === 0) return null
+  const checked = value ?? sets.filter((s) => s.builtin).map((s) => s.id)
+  const on = cli === 'claude'
+  return (
+    <div className="flex flex-col gap-1 text-xs font-medium">
+      세트
+      <div className={`flex flex-wrap gap-1.5 ${on ? '' : 'opacity-40'}`}>
+        {sets.map((s) => (
+          <label key={s.id} title={s.description} className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 font-normal">
+            <input type="checkbox" disabled={!on} checked={checked.includes(s.id)} onChange={(e) => onChange(e.target.checked ? [...checked, s.id] : checked.filter((i) => i !== s.id))} />
+            {s.name}
+            <span className="text-[10px] text-neutral-500">{s.item_ids.length}개</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export type SetDraft = { name: string; description: string; item_ids: string[] }
+export const blankSet = (): SetDraft => ({ name: '', description: '', item_ids: [] })
+
+/** The "세트" tab of the Agent widget. */
+export function SetList({ agents, sets, exts, reload, editing, setEditing }: {
+  agents: Agent[]
+  sets: SkillSet[]
+  exts: Extension[]
+  reload: () => void
+  editing: SkillSet | SetDraft | null
+  setEditing: (s: SkillSet | SetDraft | null) => void
+}) {
+  return (
+    <>
+      {sets.length === 0 && <Empty>세트를 만들어 스킬과 하네스를 묶으세요</Empty>}
+      {sets.map((s) => (
+        <button key={s.id} onClick={() => setEditing(s)} className="flex items-start gap-2.5 rounded-md bg-neutral-100 px-2.5 py-2 text-left hover:bg-neutral-200">
+          <span className="mt-0.5 shrink-0 rounded border border-neutral-300 bg-white px-1 text-[10px] text-neutral-500">세트</span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1.5">
+              <span className="truncate text-[13px] font-medium">{s.name}</span>
+              {!!s.builtin && <span className="shrink-0 rounded bg-neutral-200 px-1 text-[10px] text-neutral-600">기본</span>}
+              {s.created_by && <span className="shrink-0 rounded bg-amber-100 px-1 text-[10px] text-amber-800">{s.created_by}이(가) 만듦 · 검토 필요</span>}
+            </span>
+            <span className="block truncate text-[11px] text-neutral-500">
+              {s.item_ids.map((i) => exts.find((x) => x.id === i)?.name).filter(Boolean).join(', ') || '비어 있음'}
+            </span>
+          </span>
+          <span className="shrink-0 text-[11px] text-neutral-500">{s.agent_ids.length ? `에이전트 ${s.agent_ids.length}` : '미적용'}</span>
+        </button>
+      ))}
+      {editing && (
+        <SetEditor
+          key={'id' in editing ? editing.id : 'new'}
+          initial={editing}
+          agents={agents}
+          exts={exts}
+          onClose={() => setEditing(null)}
+          onCopy={(draft) => setEditing(draft)}
+          onSaved={() => (reload(), setEditing(null))}
+        />
+      )}
+    </>
+  )
+}
+
+/** Create or edit one set: its skills and harness, and which agents get it. The default set is shown, not edited. */
+function SetEditor({ initial, agents, exts, onClose, onCopy, onSaved }: {
+  initial: SkillSet | SetDraft
+  agents: Agent[]
+  exts: Extension[]
+  onClose: () => void
+  onCopy: (d: SetDraft) => void
+  onSaved: () => void
+}) {
+  const saved = 'id' in initial ? initial : null
+  const locked = !!saved?.builtin
+  const [draft, setDraft] = useState<SetDraft>({ name: initial.name, description: initial.description, item_ids: initial.item_ids })
+  const [agentIds, setAgentIds] = useState<string[]>(saved?.agent_ids ?? [])
+  const [error, setError] = useState<string | null>(null)
+  const toggle = (list: string[], id: string, on: boolean) => (on ? [...list, id] : list.filter((i) => i !== id))
+
+  async function save() {
+    setError(null)
+    try {
+      const s = locked
+        ? saved!
+        : await api<SkillSet>(saved ? `/api/extensions/sets/${saved.id}` : '/api/extensions/sets', { method: saved ? 'PUT' : 'POST', json: draft })
+      await api(`/api/extensions/sets/${s.id}/agents`, { method: 'PUT', json: { agent_ids: agentIds } })
+      onSaved()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  async function remove() {
+    if (saved && window.confirm(`세트 '${saved.name}'을(를) 지울까요? 붙어 있던 에이전트에서도 빠집니다. 안의 스킬·하네스는 남습니다.`)) {
+      await api(`/api/extensions/sets/${saved.id}`, { method: 'DELETE' })
+      onSaved()
+    }
+  }
+
+  const label = 'flex flex-col gap-1 text-xs font-medium text-neutral-500'
+  const row = 'flex items-center gap-2.5 border-b border-neutral-200 px-3 py-2 last:border-b-0'
+  return (
+    <Modal
+      onClose={onClose}
+      title={
+        <>
+          <h2 className="text-[17px] font-bold">{locked ? '기본 세트' : saved ? '세트 고치기' : '세트 만들기'}</h2>
+          {locked && <p className="mt-1 text-[12px] text-neutral-500">앱이 관리하는 세트입니다. 담긴 것을 바꾸려면 복사해서 새 세트로 만드세요. 붙일 에이전트는 고를 수 있습니다.</p>}
+          {saved?.created_by && <p className="mt-1 text-[12px] text-amber-700">에이전트 '{saved.created_by}'이(가) 만들었습니다. 내용을 확인하고 저장하면 검토 표시가 사라집니다.</p>}
+        </>
+      }
+      footer={
+        <>
+          <p className="flex-1 text-[11px] text-neutral-500">Claude Code 에이전트에만 적용됩니다. 세트를 고치면 쓰는 에이전트 모두 다음 재시작 때 바뀝니다.</p>
+          <ErrorText error={error} />
+          {saved && (
+            <Button variant="secondary" onClick={() => onCopy({ name: `${saved.name} 사본`, description: saved.description, item_ids: saved.item_ids })}>
+              복사
+            </Button>
+          )}
+          {saved && !locked && (
+            <Button variant="secondary" onClick={remove}>
+              삭제
+            </Button>
+          )}
+          <Button variant="secondary" onClick={onClose}>
+            취소
+          </Button>
+          <Button onClick={save} disabled={!draft.name.trim()}>
+            저장
+          </Button>
+        </>
+      }
+    >
+      <div className="flex min-h-0 flex-1 gap-6">
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <label className={label}>
+            이름
+            <input className={`${inputClass} text-[13px] text-neutral-900`} maxLength={40} disabled={locked} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="예: 비서" />
+          </label>
+          <label className={label}>
+            설명
+            <input className={`${inputClass} text-[13px] text-neutral-900`} maxLength={1000} disabled={locked} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="예: 메일 분류와 일정 정리를 하는 에이전트용" />
+          </label>
+          <span className="text-xs font-medium text-neutral-500">담을 스킬 · 하네스</span>
+          <div className="scroll-hover flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-neutral-200">
+            {exts.length === 0 && <p className="px-3 py-2 text-[12px] text-neutral-500">스킬이나 하네스가 없습니다</p>}
+            {exts.map((x) => (
+              <label key={x.id} className={`${row} ${locked ? '' : 'hover:bg-neutral-50'}`}>
+                <input type="checkbox" disabled={locked} checked={draft.item_ids.includes(x.id)} onChange={(e) => setDraft({ ...draft, item_ids: toggle(draft.item_ids, x.id, e.target.checked) })} />
+                <span className="shrink-0 rounded border border-neutral-300 px-1 text-[10px] text-neutral-500">{KIND_LABEL[x.kind]}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px]">{x.name}</span>
+                  <span className="block truncate text-[11px] text-neutral-500">{x.kind === 'hook' ? `${eventLabel(x.event)} · ${x.command}` : x.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex w-72 shrink-0 flex-col gap-2">
+          <span className="text-xs font-medium text-neutral-500">붙일 에이전트</span>
+          {agents.length === 0 && <p className="text-[12px] text-neutral-500">에이전트가 없습니다</p>}
+          <div className="flex flex-col overflow-hidden rounded-lg border border-neutral-200">
+            {agents.map((a) => (
+              <label key={a.id} className={`${row} ${takesExtensions(a) ? 'hover:bg-neutral-50' : 'opacity-40'}`}>
+                <input type="checkbox" disabled={!takesExtensions(a)} checked={agentIds.includes(a.id)} onChange={(e) => setAgentIds(toggle(agentIds, a.id, e.target.checked))} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px]">{a.name}</span>
+                  <span className="block text-[11px] text-neutral-500">{takesExtensions(a) ? 'Claude Code' : `${a.cli === 'codex' ? 'Codex' : 'PowerShell'} · 적용 안 됨`}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Modal>
   )
 }
 

@@ -3,6 +3,7 @@ uvicorn[standard]==0.54.0
 pywebview==6.2.1
 pywinpty==3.1.2
 keyring==25.7.0
+pillow==11.3.0
 
 # dev / build
 pyinstaller==6.22.3

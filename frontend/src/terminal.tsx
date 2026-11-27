@@ -5,12 +5,12 @@ import { useEffect, useRef } from 'react'
 import type { Agent } from './api'
 import { CLI_LABEL } from './agents'
 
-/** Shows the selected agent's terminal session. The server replays its scrollback, so switching back keeps history. */
-export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStatus: () => void }) {
+/** The agent's terminal itself (xterm). The server replays its scrollback, so opening it again keeps history. */
+export function TerminalView({ agentId, onStatus }: { agentId: string; onStatus: () => void }) {
   const host = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!agent || !host.current) return
+    if (!host.current) return
     const term = new Terminal({
       fontFamily: "'Cascadia Mono', Consolas, 'D2Coding', monospace",
       fontSize: 13,
@@ -81,7 +81,7 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
     // The agent keeps running on the server when the connection drops, so just connect again: the replay
     // redraws the screen as it is now.
     const connect = () => {
-      ws = new WebSocket(`${proto}://${location.host}/api/agents/${agent.id}/terminal?cols=${term.cols}&rows=${term.rows}`)
+      ws = new WebSocket(`${proto}://${location.host}/api/agents/${agentId}/terminal?cols=${term.cols}&rows=${term.rows}`)
       let first = true
       ws.onmessage = (e) => {
         // Dark-theme CLIs (Claude Code) draw typed text in RGB white: draw that black instead.
@@ -122,8 +122,13 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
       term.dispose()
     }
     // Reconnect only when a different agent is chosen, not when its status text changes.
-  }, [agent?.id])
+  }, [agentId])
 
+  return <div ref={host} className="min-h-0 flex-1 px-2 py-2" />
+}
+
+/** The selected Codex or PowerShell agent's terminal (Claude Code agents get the chat, chat.tsx). */
+export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStatus: () => void }) {
   return (
     <aside className="flex min-w-0 flex-[36] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white">
       <header className="flex items-center gap-2.5 border-b border-neutral-200 bg-neutral-50 px-3.5 py-3">
@@ -141,7 +146,7 @@ export function TerminalPanel({ agent, onStatus }: { agent: Agent | null; onStat
           <p className="text-sm text-neutral-500">왼쪽 Agent에서 에이전트를 고르면 터미널이 열립니다</p>
         )}
       </header>
-      <div ref={host} className="min-h-0 flex-1 px-2 py-2" />
+      {agent && <TerminalView key={agent.id} agentId={agent.id} onStatus={onStatus} />}
     </aside>
   )
 }

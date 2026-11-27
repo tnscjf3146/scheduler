@@ -7,6 +7,7 @@ export type Agent = {
   cli: 'claude' | 'codex' | 'shell'
   cwd: string
   status: 'stopped' | 'running' | 'exited'
+  sets: string[] // skill sets attached (Claude Code only)
 }
 export type Approval = {
   id: string
@@ -35,6 +36,18 @@ export type Extension = {
   created_by: string | null
   created_at: string
   builtin: number
+  agent_ids: string[] // attached one by one
+  via_sets: string[] // agents that get it through a set
+}
+/** Skills and harness bundled, attached to agents together. Many to many both ways. */
+export type SkillSet = {
+  id: string
+  name: string
+  description: string
+  builtin: number // the app's "Scheduler 기본": kept by the app, copied to change
+  created_by: string | null
+  created_at: string
+  item_ids: string[]
   agent_ids: string[]
 }
 export type DocForm = {

@@ -82,6 +82,14 @@ DEFAULT_SKILLS = [
 - `list_extensions`: 앱에 있는 스킬과 하네스, 붙은 에이전트를 본다.
 - `create_agent`: 에이전트를 만든다. `name`, `role`, `persona`, `cli`, `cwd`를 넣는다.
 - `list_agents`: 에이전트 목록을 본다.
+- `list_sets`: 세트(스킬·하네스 묶음) 목록을 본다.
+- `create_set`: 새 세트를 만든다. `name`, `description`, 담을 스킬·하네스 id `item_ids`를 넣는다.
+
+## 세트
+
+- 세트는 역할에 필요한 스킬과 하네스를 묶은 것이다. 예: "비서" = 메일 분류 하네스 + 일정 스킬
+- 새 세트만 만든다. 기존 세트를 고치거나 지우지 않는다. 바꾸고 싶으면 고친 사본을 새 세트로 만든다.
+- 담을 스킬·하네스가 아직 없으면 먼저 만들고, 그 id를 넣는다.
 
 ## 하네스 작성
 
@@ -95,7 +103,7 @@ DEFAULT_SKILLS = [
 
 ## 하지 않는 것
 
-- 만든 스킬과 하네스를 에이전트에 붙이지 않는다. 사용자가 화면에서 검토하고 붙인다.
+- 만든 스킬, 하네스, 세트를 에이전트에 붙이지 않는다. 사용자가 화면에서 검토하고 붙인다.
 - 하네스 명령은 CLI가 묻지 않고 실행한다. 그래서 하네스의 `description`에 무엇을 왜 하는지 쓴다.
 """,
     ),
@@ -179,6 +187,71 @@ DEFAULT_SKILLS = [
 """,
     ),
     (
+        "chat-card-rules",
+        "사용자에게 답할 때. 결과를 카드로 보여 주거나 사용자에게 확인받을 때 show_card, ask_user 도구를 쓰기 전에 읽는다. "
+        "예: \"할 일 넣어 줘\", \"메일 찾아 줘\", \"이거 지워도 돼?\"",
+        """# 채팅 카드 규칙
+
+사용자는 너와의 대화를 대시보드 채팅창으로 본다. 대답은 평소처럼 글로 쓰고, 결과와 확인은 카드와 확인 말풍선으로 보여 준다.
+
+## 카드 (`show_card`)
+
+결과가 있으면 대답 글을 쓰기 전에 카드를 하나 올린다. 글로 길게 나열하지 않는다.
+
+- 할 일을 추가·수정했다: `todo` 부품 (id만 넣는다. 제목·날짜는 앱이 채운다)
+- 메일을 찾았다·읽었다: `mail` 부품 또는 관련 있는 것만 고른 `list`
+- 여러 값을 비교·요약했다: `fields` 또는 `list`
+- 표, 차트, 일정표처럼 부품으로 안 되는 모양: `html` 부품
+
+부품 (`parts`, 20개까지):
+
+| type | 값 |
+| --- | --- |
+| `text` | `text` |
+| `fields` | `rows`: `[{label, value}]` |
+| `list` | `items`: `[{text, sub, action}]` (`sub`, `action`은 선택) |
+| `date` | `date`: `YYYY-MM-DD` 또는 `YYYY-MM-DDTHH:MM`, `label` (선택) |
+| `todo` | `id`: 할 일 id |
+| `mail` | `id`: 앱 메일 목록의 메일 id |
+| `buttons` | `buttons`: `[{label, action}]` (1~4개) |
+| `html` | `html`: HTML 문자열 |
+
+`action`:
+- `{"kind": "send", "text": "…"}`: 누르면 그 문장이 너에게 온다. 다음 할 일을 제안할 때 쓴다.
+- `{"kind": "open_todo", "id": "…"}`, `{"kind": "open_mail", "id": "…"}`: 앱에서 연다.
+- `{"kind": "link", "url": "https://…"}`: 브라우저로 연다.
+
+예:
+```json
+{"title": "관련 메일 3통", "parts": [
+  {"type": "list", "items": [{"text": "미팅 장소 변경 안내", "sub": "김대리 · 어제", "action": {"kind": "open_mail", "id": "…"}}]},
+  {"type": "buttons", "buttons": [{"label": "메모에 장소 적기", "action": {"kind": "send", "text": "메모에 새 장소 적어줘"}}]}
+]}
+```
+
+## html 부품
+
+- 격리된 틀에 그려진다. 바깥 주소(그림, 글꼴, 스크립트, 링크)는 쓸 수 없다. 그림은 `data:` 주소로 넣는다.
+- `form`, `iframe`, 비밀번호 입력칸은 쓸 수 없다.
+- 버튼은 `Scheduler.send("문장")`, `Scheduler.link("https://…")`, `Scheduler.openTodo(id)`, `Scheduler.openMail(id)`를 부른다.
+- 색과 글꼴은 틀이 주는 `var(--fg)`, `var(--muted)`, `var(--line)`, `var(--bg)`, `var(--accent)`를 쓴다.
+
+## 확인 말풍선 (`ask_user`)
+
+되돌릴 수 없는 일, 밖으로 나가는 일, 여러 개를 한꺼번에 바꾸는 일 앞에서 쓴다. 사용자가 고를 때까지 기다린다.
+
+- `question`: 한 문장. 예: "광고 메일 14통을 스팸함으로 옮길까요?"
+- `detail`: 무엇이 바뀌는지, 되돌릴 수 있는지
+- `options`: 2~4개. 첫 번째가 진행하는 쪽. 예: `["옮기기", "목록 먼저 보기", "취소"]`
+- 돌아온 `answer`대로 한다. `answer`가 없으면 진행하지 않는다.
+
+## 검증
+
+- 카드와 질문은 올리기 전에 하네스가 검사한다. 거부되면 사유대로 고쳐서 다시 올린다.
+- `todo`, `mail`, `open_todo`, `open_mail`의 id는 도구 결과에 나온 id를 그대로 쓴다.
+""",
+    ),
+    (
         "skill-writing-rules",
         "스킬을 만들거나 고칠 때. create_skill 도구를 쓰기 전에 읽는다. 예: \"보고서 쓰는 스킬 만들어 줘\", \"이 스킬 다듬어 줘\"",
         """# 스킬 작성 규칙
@@ -240,6 +313,7 @@ SKILL_POINTERS = """
 - 스킬, 하네스, 에이전트를 만들 때: `agent-tools-rules`, `skill-writing-rules`
 - 메일을 연결하거나 읽거나 보낼 때: `mail-rules`
 - 도구로 할 수 없는 일을 웹사이트에서 해야 할 때: `browser-rules`
+- 결과를 보여 주거나 확인받을 때: `chat-card-rules`
 """
 
 
@@ -255,4 +329,6 @@ def identity(agent: dict) -> str:
 
 def agents_md(agent: dict) -> str:
     """The same for Codex, which reads neither hooks nor skills: identity plus the rules written out."""
-    return "\n".join([identity(agent).replace(SKILL_POINTERS, ""), *(body for _, _, body in DEFAULT_SKILLS)])
+    # Codex runs in a terminal without the chat view, so the chat's card rules are left out.
+    return "\n".join([identity(agent).replace(SKILL_POINTERS, ""),
+                      *(body for name, _, body in DEFAULT_SKILLS if name != "chat-card-rules")])

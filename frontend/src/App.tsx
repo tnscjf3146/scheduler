@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Agents } from './agents'
 import { api, type Agent, type Todo } from './api'
 import { Approvals } from './approvals'
+import { ChatPanel } from './chat'
 import { MailReview } from './mail'
 import { TerminalPanel } from './terminal'
 import { Calendar, TodoDetail, Todos, Upcoming } from './todos'
@@ -27,6 +28,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null)
   // The todo whose detail popup is open, by id so it follows the latest data (agents change todos too).
   const [openTodo, setOpenTodo] = useState<string | null>(null)
+  const [openMail, setOpenMail] = useState<string | null>(null) // asked for by a card in the chat
   const [restarts, setRestarts] = useState(0) // bumping it remounts the terminal, which reconnects to a new session
 
   const loadTodos = useCallback(() => api<Todo[]>('/api/todos').then(setTodos, () => {}), [])
@@ -66,10 +68,14 @@ export default function App() {
           <Calendar todos={todos} />
         </div>
         <div className="flex min-w-0 min-h-0 flex-[32] flex-col gap-4">
-          <MailReview agents={agents} onOpenAgent={setSelected} />
+          <MailReview agents={agents} onOpenAgent={setSelected} openRequest={openMail} onOpened={() => setOpenMail(null)} />
           <Approvals agents={agents} onOpenAgent={setSelected} />
         </div>
-        <TerminalPanel key={restarts} agent={agent} onStatus={loadAgents} />
+        {agent?.cli === 'claude' ? (
+          <ChatPanel key={`${agent.id}-${restarts}`} agent={agent} onStatus={loadAgents} onOpenTodo={setOpenTodo} onOpenMail={setOpenMail} />
+        ) : (
+          <TerminalPanel key={restarts} agent={agent} onStatus={loadAgents} />
+        )}
       </main>
       {opened && <TodoDetail key={opened.id} todo={opened} onClose={() => setOpenTodo(null)} reload={loadTodos} />}
     </div>

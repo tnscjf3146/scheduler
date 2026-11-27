@@ -8,6 +8,7 @@ import email.policy
 import imaplib
 import re
 import time
+from pathlib import Path
 from email.message import EmailMessage
 
 from fastapi import HTTPException
@@ -259,8 +260,9 @@ def search(account_id: str, folder: str = "INBOX", sender: str | None = None, to
         return found[:limit]
 
 
-def read(account_id: str, folder: str, uid: int) -> dict:
-    """The whole mail, without marking it read (BODY.PEEK)."""
+def read(account_id: str, folder: str, uid: int, save_to: str | None = None) -> dict:
+    """The whole mail, without marking it read (BODY.PEEK). With save_to (an agent's folder), its images and
+    attachments are saved under inbox/ there, since the text alone may miss what is in them."""
     with _Session(account_id) as (conn, folders):
         _select(conn, folders, folder, readonly=True)
         data = _ok(conn.uid("FETCH", str(uid), "(UID FLAGS BODY.PEEK[])"), "메일을 가져오")
@@ -270,9 +272,14 @@ def read(account_id: str, folder: str, uid: int) -> dict:
     _, flags = _meta(part[0])
     msg = email.message_from_bytes(part[1], policy=email.policy.default)
     doc = mail.parse_message(part[1])
-    return {"uid": uid, "folder": folder, "from": doc["sender"], "to": str(msg["To"] or ""), "cc": str(msg["Cc"] or ""),
-            "subject": doc["subject"], "date": doc["received_at"], "flags": _named(flags), "body": doc["body"],
-            "attachments": [p.get_filename() for p in msg.iter_attachments() if p.get_filename()]}
+    out = {"uid": uid, "folder": folder, "from": doc["sender"], "to": str(msg["To"] or ""), "cc": str(msg["Cc"] or ""),
+           "subject": doc["subject"], "date": doc["received_at"], "flags": _named(flags), "body": doc["body"],
+           "attachments": [p.get_filename() for p in msg.iter_attachments() if p.get_filename()]}
+    if save_to:
+        slug = re.sub(r"[^0-9A-Za-z가-힣]+", "-", doc["subject"]).strip("-")[:40] or "mail"
+        extra = mail.save_mail_files(part[1], None, Path(save_to) / "inbox" / f"{doc['received_at'][:10]}-{slug}-{account_id[:4]}{uid}")
+        out.update(files=[str(p) for p in extra["files"]], links=extra["links"], remote_images=extra["remote_images"][:30])
+    return out
 
 
 # ---- change: flags, copy, move, delete -----------------------------------------------------------

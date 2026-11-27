@@ -30,6 +30,32 @@ def _has_claude_history(cwd: str) -> bool:
     return any((Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", cwd)).glob("*.jsonl"))
 
 
+# Scheduler tools that only read, or change only what the user sees and can undo on the dashboard, plus the chat's
+# own card tools: no permission question. The rest (sending or deleting mail, agents, hooks...) asks in the chat.
+QUIET_TOOLS = [f"mcp__scheduler__{t}" for t in (
+    "show_card", "ask_user", "list_forms", "get_approval", "submit_approval", "list_todos", "add_todo", "update_todo",
+    "list_extensions", "list_agents", "list_mail_accounts", "list_mails", "read_mail", "sync_mail", "list_mail_folders",
+    "mail_quota", "search_mailbox", "read_mailbox_mail", "set_mail_flags", "save_mail_draft",
+)]
+ASK_TIMEOUT_MS = 31 * 60 * 1000  # a little over chat.ANSWER_TIMEOUT
+
+# Run by Claude Code for the app's hooks: hands the hook's input to the app and prints the app's answer (if any).
+# Fails quietly, so an app that is gone leaves Claude Code working as usual.
+HOOK_SCRIPT = r"""param([string]$Event)
+$ErrorActionPreference = 'SilentlyContinue'
+[Console]::InputEncoding = [Text.Encoding]::UTF8
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$body = [Console]::In.ReadToEnd()
+try {
+  $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "{url}/$Event" -ContentType 'application/json; charset=utf-8' `
+    -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 1900
+  $text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+  if ($text.Trim() -and $text.Trim() -ne 'null') { [Console]::Out.Write($text) }
+} catch {}
+exit 0
+"""
+
+
 def _launch_script(agent: dict, mcp_url: str) -> Path:
     """Writes the PowerShell script that starts the agent's CLI with the approval MCP server attached.
     Continues the last conversation in the agent's folder when there is one, so closing the app loses nothing."""
@@ -51,9 +77,16 @@ def _launch_script(agent: dict, mcp_url: str) -> Path:
     lines = [f"Set-Location -LiteralPath {_ps_quote(agent['cwd'])}"]
     if agent["cli"] == "claude":
         # Identity, skills and harness, as a plugin (see extensions.py). Nothing goes into the work folder.
-        plugin = extensions.build_plugin(agent)
+        # The chat view (chat.py) learns what happens through these hooks; the script posts each to the app.
+        hook = folder / "hook.ps1"
+        hook.write_text(HOOK_SCRIPT.replace("{url}", f"{mcp_url.rsplit('/mcp/', 1)[0]}/api/agents/{agent['id']}/hook"),
+                        encoding="utf-8-sig")
+        plugin = extensions.build_plugin(agent, hook_script=hook)
+        lines.append(f"$env:MCP_TOOL_TIMEOUT = '{ASK_TIMEOUT_MS}'")  # ask_user waits for the user's answer
+        quiet = " ".join(QUIET_TOOLS)
         # --chrome: Claude in Chrome, the user's own Chrome (already signed in to their sites), for browser-rules.
-        args = f"--chrome --mcp-config {_ps_quote(str(mcp_json))} --plugin-dir {_ps_quote(str(plugin))}"
+        args = (f"--chrome --mcp-config {_ps_quote(str(mcp_json))} --plugin-dir {_ps_quote(str(plugin))} "
+                f"--allowedTools {quiet}")
         start = f"claude {args}"
         if not is_fresh and _has_claude_history(agent["cwd"]):
             # A saved file is no promise --continue accepts it (e.g. a conversation Claude Code ran as a background
@@ -80,11 +113,16 @@ class Session:
             ["powershell.exe", "-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", str(script)],
             cwd=agent["cwd"], dimensions=(rows, cols), env=child_env(),
         )
+        self.cwd = agent["cwd"]
         self.buffer = ""
         self.received = 0  # total characters ever printed (buffer is capped, this is not)
         self.lock = threading.Lock()
         self.subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = []
         threading.Thread(target=self._read, daemon=True).start()
+        if agent["cli"] == "claude":
+            from . import chat  # chat imports this module
+
+            chat.Watcher(agent["id"], self)
 
     def _read(self) -> None:
         while True:
@@ -193,7 +231,7 @@ def get_or_start(agent: dict, base_url: str, cols: int, rows: int) -> Session:
         return session
 
 
-def type_to_agent(agent_id: str, line: str, base_url: str) -> bool:
+def type_to_agent(agent_id: str, line: str, base_url: str, shown: dict | None = None) -> bool:
     """Types one request line into the agent's CLI, starting its terminal if needed. Returns whether it was started.
     The line goes in once the CLI is ready (and the user answered a "trust this folder?" question)."""
     from fastapi import HTTPException
@@ -209,6 +247,10 @@ def type_to_agent(agent_id: str, line: str, base_url: str) -> bool:
     session = get_or_start(agent, base_url, 100, 30)
     if was_running and session.at_shell_prompt():
         raise HTTPException(409, "에이전트의 CLI가 꺼져 있습니다. 에이전트 메뉴에서 재시작한 뒤 다시 보내세요")
+    if shown and agent["cli"] == "claude":  # the chat shows `shown` in place of the typed line
+        from . import chat
+
+        chat.alias(agent_id, line, shown)
     threading.Thread(target=session.type_when_ready, args=(line,), daemon=True).start()
     return not was_running
 
@@ -228,7 +270,15 @@ def child_env() -> dict[str, str]:
     The packaged exe runs with PyInstaller's own variables (_PYI_*, _MEIPASS2) set. Handed down, they make any
     PyInstaller program started inside an agent terminal - Scheduler.exe itself included - believe it is already
     unpacked and look for python313.dll in this app's temp folder, which fails ("Failed to load Python DLL")."""
-    return {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+    return {k: v for k, v in os.environ.items()
+            if not k.upper().startswith(("_PYI_", "_MEIPASS")) and k.upper() not in PARENT_CLAUDE_VARS}
+
+
+# Set when the app itself was started from inside a Claude Code session. Handed down, they make an agent's
+# Claude Code act as that session's child: it then keeps no transcript, and the chat view stays empty.
+PARENT_CLAUDE_VARS = {"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID",
+                      "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_CHILD_NOTES_DIR", "CLAUDE_CODE_SESSION_ATTENDED",
+                      "CLAUDE_CODE_ENTRYPOINT", "AI_AGENT", "CLAUDE_EFFORT"}
 
 
 def kill_strays(agent_ids: list[str]) -> None:

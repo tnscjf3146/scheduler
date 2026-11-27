@@ -7,9 +7,11 @@ import { createPortal } from 'react-dom'
  */
 export function Widget({ title, action, top, children, fade = true }: { title: ReactNode; action?: ReactNode; top?: ReactNode; children?: ReactNode; fade?: boolean }) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-xl border border-neutral-200 bg-white p-3.5">
-      <header className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-neutral-900">{title}</h2>
+    // @container: the header reacts to the widget's own width (columns differ), not the window's.
+    <section className="@container flex min-h-0 flex-1 flex-col gap-2.5 rounded-xl border border-neutral-200 bg-white p-3.5">
+      {/* Narrow: words never break mid-word; the actions move to their own line, and the title gets a bit smaller. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 whitespace-nowrap">
+        <h2 className="text-[13px] font-bold text-neutral-900 @[22rem]:text-sm">{title}</h2>
         {action}
       </header>
       {top}
@@ -23,7 +25,7 @@ export function Empty({ children }: { children: ReactNode }) {
 }
 
 export function LinkButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button {...props} className="text-xs text-neutral-500 hover:text-neutral-900 disabled:opacity-40" />
+  return <button {...props} className="text-xs whitespace-nowrap text-neutral-500 hover:text-neutral-900 disabled:opacity-40" />
 }
 
 export function Button({ variant = 'primary', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' }) {

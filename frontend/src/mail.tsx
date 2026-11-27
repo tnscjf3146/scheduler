@@ -5,11 +5,26 @@ import { AgentPicker, canReceive } from './agents'
 
 const senderName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim() || s
 
-export function MailReview({ agents, onOpenAgent }: { agents: Agent[]; onOpenAgent: (id: string) => void }) {
+export function MailReview({
+  agents,
+  onOpenAgent,
+  openRequest,
+  onOpened,
+}: {
+  agents: Agent[]
+  onOpenAgent: (id: string) => void
+  openRequest?: string | null // a mail to open from elsewhere (an agent's card in the chat)
+  onOpened?: () => void
+}) {
   const [all, setAll] = useState<MailItem[]>([])
   const [unread, setUnread] = useState<MailItem[]>([])
   const [showAll, setShowAll] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
+  useEffect(() => {
+    if (!openRequest) return
+    setOpen(openRequest)
+    onOpened?.()
+  }, [openRequest])
   const [managing, setManaging] = useState(false)
   const load = () => {
     api<MailItem[]>('/api/mail/messages?unread=true').then(setUnread, () => {})

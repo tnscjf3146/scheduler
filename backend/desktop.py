@@ -36,7 +36,8 @@ def main() -> None:
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_config=None))
     threading.Thread(target=server.run, daemon=True).start()
 
-    webview.create_window("Scheduler", f"http://127.0.0.1:{port}", width=1440, height=900, min_size=(1100, 700), js_api=JsApi())
+    webview.create_window("Scheduler", f"http://127.0.0.1:{port}", width=1440, height=900, min_size=(1100, 700), js_api=JsApi(),
+                          text_select=True)  # pywebview blocks text selection unless told otherwise
     webview.start()  # blocks until the window closes
     sessions.stop_all()  # end agent terminals with the window
     # Leftover pty reader / WinForms threads otherwise keep the process alive after the window is gone.

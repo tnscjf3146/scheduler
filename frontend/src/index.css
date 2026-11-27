@@ -75,3 +75,11 @@ body {
   animation: scroll-fade linear both;
   animation-timeline: scroll(self);
 }
+
+/* Text can be selected and copied (desktop.py text_select=True), except on controls and headers, where a drag
+   would only highlight labels. */
+button,
+header,
+[role='tab'] {
+  user-select: none;
+}
